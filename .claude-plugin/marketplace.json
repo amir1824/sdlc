@@ -1,0 +1,17 @@
+{
+  "name": "sdlc",
+  "owner": {
+    "name": "AmirBenShimol"
+  },
+  "metadata": {
+    "description": "A risk-tiered SDLC for Claude Code: role agents, gated commands and engineering rules."
+  },
+  "plugins": [
+    {
+      "name": "sdlc",
+      "source": "./plugins/sdlc",
+      "description": "A risk-tiered SDLC for Claude Code: 14 role agents and the /sdlc, /brutal-review and /security-audit commands.",
+      "version": "0.1.0"
+    }
+  ]
+}

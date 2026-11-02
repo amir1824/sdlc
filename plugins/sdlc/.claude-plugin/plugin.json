@@ -1,0 +1,10 @@
+{
+  "name": "sdlc",
+  "version": "0.1.0",
+  "description": "A risk-tiered SDLC for Claude Code: 14 role agents (plan, build, verify, ship) and the /sdlc, /brutal-review and /security-audit commands.",
+  "author": {
+    "name": "AmirBenShimol"
+  },
+  "repository": "https://github.com/amir1824/sdlc",
+  "keywords": ["sdlc", "agents", "code-review", "workflow"]
+}

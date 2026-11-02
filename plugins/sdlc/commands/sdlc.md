@@ -1,0 +1,42 @@
+---
+description: Run a feature through the departments, one stage at a time, with a gate and a handoff file at each stage
+argument-hint: <the feature or problem, in a sentence or two>
+---
+
+Run the request below through the company's stages. You are the chair: you run the order, you write the handoff files, and you stop at every gate marked STOP. Agents return text and stay read-only where their tools say so; you save what they return.
+
+Request: $ARGUMENTS
+
+Handoff files live in `.sdlc/<short-slug>/`. Create the folder once. Each stage reads the previous file and writes its own, so the files, not the conversation, are the company's memory. If a stage does not apply (no UI, an internal tool nobody else uses), skip it and write the reason in `status.md`; never skip silently.
+
+| # | Stage | Agent | Reads | Writes | Gate |
+|---|---|---|---|---|---|
+| 1 | Discover | `user-researcher`, or the chair when the request states the problem and who it is for | the request | `research.md` or `intent.md` | A problem, a first audience and the riskiest assumption are named, or the stage ends with "stop: no evidence". When the request itself states the problem and who it is for, that counts as evidence labelled "owner's statement, n=1": the chair writes `intent.md` (Problem, Proposed outcome, Affected users and systems, Constraints, Open questions) instead of calling `user-researcher`, and the owner corrects it at the Define STOP, not before. A request that names neither still ends with "stop: no evidence". |
+| 2 | Define | `product-manager`, then `analyst` | `research.md` or `intent.md` | `prd.md`, `metrics.md` | **STOP.** The owner approves scope. The PRD opens with the `idea-slayer` verdict (KILL / PIVOT / PROCEED); show it unsoftened. Every requirement has an ID (R1, R2, ...) and an acceptance criterion. One primary metric, one guardrail, and a readout date in `metrics.md` that is later than the day the change can ship. |
+| 3 | Design | `product-designer` | `prd.md` | `design-spec.md` | Skip when there is no UI. Every state in the PRD is specified. |
+| 4 | Plan | `tech-lead`, then `security-reviewer` on the plan | `prd.md`, `design-spec.md` | `plan.md` | **STOP.** The owner approves the plan before any code. `tech-lead` runs `architecture-slayer` and `change-impact` on the plan and shows the verdict and what the change can break. `security-reviewer` reads tech-lead's plan and names the trust boundaries it crosses; the chair then saves `plan.md` once, with tech-lead's Lessons used, Requirement map, Instances and Contract test sections and a Trust boundaries section, before the STOP summary. |
+| 5 | Build | `backend-developer`, `frontend-developer` | `plan.md` | the code, `build.md` | Type-check and lint are clean on the touched files. No two agents write the same file. At most the one test file written or changed, and the builder runs that one file and quotes its output; the rest of the suite is not run in this stage, it runs once, at Ship. A file the plan does not name goes into `build.md` with its reason. |
+| 6 | Verify | `qa-engineer`, `brutal-reviewer`, `security-reviewer` | the diff, `prd.md`, `plan.md` | `review.md` | Acceptance criteria met, every finding fixed or written down with a reason. Every requirement ID (or numbered requirement, in a PRD older than IDs) has a check that ran, and every place in the plan's Instances section, when it has one, is covered. Verifiers are never the agent that built the change. For UI work `qa-engineer` also runs `browser-qa` and, when shared state changed, `click-path-audit`. |
+| 7 | Ship | `devops-engineer`, `docs-engineer`, `leak-scanner` before anything public | `review.md` | `release.md` | CI green, or, when the project has no CI, its own checks pass locally (type-check, lint, validate, and the whole suite once, in one process, run by `devops-engineer`) with the real output quoted; a check not run is reported as not run. A rollback is written. Docs match the code. When a URL is deployed, `devops-engineer` runs `canary-watch` and reports the result; with nothing deployed it says it was not run. |
+| 8 | Launch | the marketing team, run as `/campaign` stages 0 to 9 with `prd.md` and `release.md` as the request | `prd.md`, `release.md` | `launch.md` (a pointer to the campaign folder) | Skip for internal changes, or when `/campaign` is not installed, with the reason. Every `/campaign` STOP gate applies. Drafts only; the owner publishes. |
+| 9 | Learn | `analyst` | `metrics.md` | `learn.md` | Run only on or after the readout date in `metrics.md`. Before that date do not write `learn.md`: record Learn in `status.md` as pending until that date, and stop. A verdict of moved, did not move or cannot tell, with the counts, measured from use after release and not from the tests passing. |
+
+## Rules
+- Classify the risk (LOW, MEDIUM or HIGH, as in `~/.claude/rules/sdlc.md`) in `status.md` before stage 1. When it is LOW, say so in your first reply and recommend doing it outside this pipeline; the owner chooses at the first STOP gate, and until then the pipeline runs as usual. Never write or change code before Build, whatever the class. HIGH work adds to the Plan gate a failure analysis, a verification strategy and a rollback, and the owner's yes covers them.
+- Run stages in order. Within a stage, run independent agents in parallel only when they write no common file.
+- At a STOP gate, summarize the file in a few lines, name the open questions, and wait for an explicit yes. A yes to one gate does not cover the next.
+- A failed gate sends the work back to the stage that owns the fix, not forward. Say which stage and why.
+- Report skipped gates as skipped, never as passed. If a command was not run, say so.
+- Never commit, push, publish or send anything unless the owner asked for it in this conversation.
+- A gate skill that cannot run (`idea-slayer`, `architecture-slayer`, `change-impact`, `canary-watch`, `browser-qa`, `click-path-audit`) is reported at the top of the file as "not run". An agent's own judgement may stand in only when labelled "own judgement, not <skill>"; never put a skill's name on a verdict it did not produce.
+
+## Status and retro
+Keep `.sdlc/<slug>/status.md`: one line per stage with done, skipped or blocked, and the reason. The last line of `status.md` says where the run stands: `waiting: <gate or Learn date>` while it waits at a STOP gate or for the readout, `closed` when no stage is left, or `abandoned: <reason>`. Write `retro.md` once the last stage that can run today is done; `closed` and `abandoned` need it. `retro.md` has three headings only: **Failed a gate** (which stage, what went wrong), **Cost us time** (what repeated), **Teach the agent**, in two parts:
+- A row for each lesson the plan used, rated only once Verify has run (before that, write `not rated yet: stopped before Verify`): `L<n>: what it changed -> what was observed, at which finding, check or step -> helped | hurt | no observed effect | confounded`. Prefer `confounded` when the run cannot isolate the lesson's effect. Write `none used` when the plan used none.
+- At most one new lesson: cue (the shape of situation, not this task's facts), lesson (the operation, naming the agent), kind (INV for how an agent works, DOM for what a practitioner knows), evidence (the finding or check it rests on). Or the single line `NO_ENTRY` when the run shows no concrete contrast that would recur.
+
+Then update the lessons library at `$HOME/.claude/lessons/LESSONS.md` (expand `$HOME` to an absolute path), when it exists. For each rated row, set that lesson's `used` entry for this run's slug, replacing an earlier entry from the same run; a `hurt` row sets `status: retired`, and `helped` from a second run sets `confidence: medium`. Add the new lesson with the next number, `confidence: low` and `status: library`. Tell the owner what changed in the library. When the file does not exist, keep the lesson in `retro.md` only and say so. Do not edit any agent file from this command: the library is read at Plan and changes no agent.
+
+Promoting a lesson into an agent or a skill happens outside this command, only after `helped` in two runs, an A/B eval that keeps the unchanged agent as a candidate, and the owner's yes. It edits the agent in the repo it is installed from, so every copy follows from one source.
+
+If the request above is empty, ask for the feature in one sentence and stop.
