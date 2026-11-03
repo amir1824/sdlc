@@ -14,6 +14,11 @@ The idea is to use the lightest process the risk allows. A one-line UI fix goes 
 | `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`): no code before you approve the plan, `Evidence:` on `fix:` commits, read-only review agents stay read-only |
 | `scripts/` | `install.sh` (rules, and optionally agents and commands, into `~/.claude`), `check.sh` (drift, hook wiring and version check) and `rate_lesson.py` (a lesson's A/B eval rating, written to the lessons library) |
 | `tests/` | unit tests for the gate hooks and `rate_lesson.py` |
+| `docs/` | `architecture.drawio`, the diagram below, and `architecture.png`, its rendered image |
+
+![The plugin's parts and how they connect: the gate hooks, the nine /sdlc stages, and the loop that improves the agents](docs/architecture.png)
+
+The diagram's labels are in Hebrew. Its source is `docs/architecture.drawio`: open it in draw.io or at [app.diagrams.net](https://app.diagrams.net), and export it again to `docs/architecture.png` after a change.
 
 ## How it works
 
@@ -96,7 +101,7 @@ Some gates call skills from other plugins: `idea-slayer` and `architecture-slaye
 
 ## A lessons library (optional)
 
-`/sdlc` can learn between runs:
+`/sdlc` can learn between runs (the green box in the [diagram](docs/architecture.png) draws the whole loop):
 
 - **At Plan,** `tech-lead` reads `~/.claude/lessons/LESSONS.md` when it exists. It applies the lessons whose cue fits the change, skipping `proposed` and `retired` ones, and verifies their facts first.
 - **At the retro,** each lesson the plan used gets a row: what it changed and what was observed. One run has no contrast, so the row is rated `confounded`. At most one new lesson is added, as `proposed`, and `tech-lead` does not apply it until you accept it.

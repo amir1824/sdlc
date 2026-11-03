@@ -2,6 +2,10 @@
 
 All notable changes, newest first. Versions follow [semver](https://semver.org): a change that alters how an agent or a gate behaves is a minor version, and a wording fix is a patch.
 
+## Unreleased
+
+- README: a diagram of the plugin (`docs/architecture.drawio`, rendered to `docs/architecture.png`). It shows the gate hooks and their state, the nine `/sdlc` stages with their agents and files, and the loop that improves the agents: the retro, the lessons library, the A/B rating, promotion into an agent file and the promotion check.
+
 ## 0.2.1 (2026-11-03)
 
 Fixes from a code review of 0.2.0. Each code fix has a test that failed before it.
