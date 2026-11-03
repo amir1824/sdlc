@@ -5,8 +5,9 @@
 exactly `approve plan` or `אשר תוכנית` unlocks them and binds the approval to the hash of
 each `.sdlc/*/plan.md`; a reply of exactly `sdlc off` releases the session.
 `tool` (PreToolUse): denies an edit in the project while the session is locked or after an
-approved plan.md changed, a `fix:` commit without an `Evidence:` line, and a Bash command
-that writes from a read-only review agent.
+approved plan.md changed or a new one appeared, a `fix:` commit without an `Evidence:` line
+(a message it cannot read is judged on the command text), and a Bash command that writes from a
+read-only review agent.
 
 Fails open: any error exits non-zero (never 2), so Claude Code lets the action through.
 SDLC_GATE=off disables it. SDLC_GATE_HOME (default ~/.claude) holds sdlc-gate/ and rules/.
@@ -18,7 +19,9 @@ so a second module would need path hacking to import.
 """
 from __future__ import annotations
 
+import bisect
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -61,19 +64,36 @@ WRITE_COMMAND = re.compile(
     + r"|cherry-pick|clean|apply|am|add|rm|mv|init|clone|fetch|worktree|update-ref|config|gc|prune)" + VERB_END
     + r"|" + COMMAND_START + GIT + r"(?:stash(?![ \t]+(?:list|show)\b)"
     + r"|tag" + SPACE + r"(?!-l\b|--list\b|--contains\b|-n\b)" + WORD
-    + r"|branch" + SPACE + r"(?:" + WORD + r"+" + SPACE + r")*?-[dDmM])"
+    + r"|branch" + SPACE + r"(?:(?!-)" + WORD + r"|(?:" + WORD + r"+" + SPACE + r")*?-(?:[a-zA-Z]*[dDmMcCfut]"
+    + r"|-(?:delete|move|copy|force|track|set-upstream-to|unset-upstream|edit-description)\b)))"
     + r"|" + COMMAND_START + r"(?:npm|pnpm|yarn|pip3?|brew|uv)" + SPACE
     + r"(?:install|i|ci|add|remove|uninstall)" + VERB_END
     + r"|" + COMMAND_START + r"(?:curl|wget)\b[^;&|\n]*[ \t](?:-o|-O|--output)\b"
     + r"|[ \t]-(?:delete|exec)\b"
 )
 GIT_COMMIT = re.compile(COMMAND_START + r"(?:\w+=" + WORD + r"*" + SPACE + r")*" + GIT + r"commit\b")
-MESSAGE_FILE = re.compile(r"(?:[ \t]-F|--file)(?:=|[ \t]+)(['\"]?)([^\s'\"]+)\1")
+QUOTED_OR_WORD = r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|)'\"]+)"
+MESSAGE_FILE = re.compile(r"(?:[ \t]-F|--file)(?:=|[ \t]+)" + QUOTED_OR_WORD)
+CD = re.compile(r"(?:^|[;&|\n(][ \t]*)cd" + SPACE + QUOTED_OR_WORD)
+GIT_DIR = re.compile(r"[ \t]-C" + SPACE + QUOTED_OR_WORD)
 MESSAGE_FLAG = re.compile(r"(?:[ \t]-[a-zA-Z]*m|--message)(?:=|[ \t]*)" + QUOTES)
-HEREDOC_START = re.compile(r"<<-?[ \t]*['\"]?\w+['\"]?[^\n]*\n")
+HEREDOC_START = re.compile(r"<<-?[ \t]*['\"]?\w{1,64}['\"]?[^\n]{0,256}\n")
 INLINE_HEREDOC = re.compile(r"\$\([ \t]*cat[ \t]*<<-?[ \t]*['\"]?\w+['\"]?[^\n]*\n")
 FIX_SUBJECT = re.compile(r"fix(?:\([^)]*\))?!?:", re.IGNORECASE)
 EVIDENCE_LINE = re.compile(r"(?:^|\n|-m[ \t]*" + QUOTES + r"|--message=" + QUOTES + r")[ \t]*Evidence:[ \t]*[^\s'\"\\]")
+# For a message the gate cannot read (piped in, or a -F file not there yet): the same two checks
+# on the text that supplies it, at a line start, an escaped `\n` or a quote.
+LOOSE_FIX = re.compile(r"(?:^|\n|\\n|['\"])[ \t]*fix(?:\([^)\n]{0,64}\))?!?:", re.IGNORECASE)
+LOOSE_EVIDENCE = re.compile(r"(?:^|\n|\\n|['\"])[ \t]*Evidence:[ \t]*[^\s'\"\\]")
+# A heredoc's head only: its body is found by scanning lines (heredoc_spans), which a single regex
+# with a lazy body would do in quadratic time on an unterminated head.
+HEREDOC_HEAD = re.compile(r"(?<![<\d])<<(?!<)-?[ \t]*(['\"]?)([A-Za-z_]\w{0,63})\1")
+QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+STATEMENT_END = re.compile(r";|&&|\|\||(?<!\\)\n")
+MAX_COMMITS = 50
+EVIDENCE_REASON = ("sdlc-gate: a fix: commit needs an `Evidence:` line in its body: a log line quoted with its "
+                   "file and line, or the name of a check that failed before the change. "
+                   "Write only evidence you observed.")
 UNLOCK_WORDS = "exactly `approve plan` (or `אשר תוכנית`), or `sdlc off` to leave the pipeline"
 
 
@@ -170,8 +190,9 @@ def on_prompt(data: dict) -> None:
     if lock is None or approved is None:
         return
     gated = lock.exists() or approved.exists()
-    if gated and RELEASE_PROMPT.fullmatch(text):
-        release(data, lock, approved, text)
+    if RELEASE_PROMPT.fullmatch(text):
+        if gated:
+            release(data, lock, approved, text)
     elif SDLC_PROMPT.match(text):
         start_run(data, lock, approved)
     elif gated and APPROVE_PROMPT.fullmatch(text):
@@ -181,7 +202,7 @@ def on_prompt(data: dict) -> None:
 def changed_plans(root: Path, approved: Path) -> list[str]:
     recorded = json.loads(approved.read_text()).get("plans", {})
     current = plan_hashes(root)
-    return sorted(plan for plan, digest in recorded.items() if current.get(plan) != digest)
+    return sorted(plan for plan in recorded.keys() | current.keys() if current.get(plan) != recorded.get(plan))
 
 
 def lock_reason(data: dict, root: Path) -> str:
@@ -214,26 +235,100 @@ def file_edit_reason(data: dict, file_path: str) -> str:
     return "" if first == (".sdlc",) else lock_reason(data, project_root(data))
 
 
-def commit_message(args: str, cwd: str) -> str:
-    """The commit message from -F <file>, -F - with a heredoc, or -m, to the end of the command."""
+def unquote(word: str) -> str:
+    return word[1:-1] if word[:1] in ("'", '"') else word
+
+
+def covered(spans: list[tuple[int, int]], position: int) -> bool:
+    """Whether position falls inside one of the sorted, non-overlapping spans."""
+    index = bisect.bisect_right(spans, (position, float("inf"))) - 1
+    return index >= 0 and spans[index][0] <= position < spans[index][1]
+
+
+def heredoc_spans(command: str) -> list[tuple[int, int, int]]:
+    """(head start, body start, body end) of each heredoc. The body runs from the line after `<<WORD`
+    to a line holding only WORD, or to the end of the command; the scan never revisits text."""
+    spans, position = [], 0
+    while True:
+        head = HEREDOC_HEAD.search(command, position)
+        line_end = command.find("\n", head.end()) if head else -1
+        if line_end == -1:
+            return spans
+        end_line = re.compile(r"^[ \t]*" + re.escape(head.group(2)) + r"[ \t]*$", re.MULTILINE)
+        terminator = end_line.search(command, line_end + 1)
+        spans.append((head.start(), line_end + 1, terminator.start() if terminator else len(command)))
+        position = terminator.end() if terminator else len(command)
+
+
+def statement_spans(command: str, skip: list[list[tuple[int, int]]]) -> list[tuple[int, int]]:
+    """Each statement's span: the text between ;, &&, || and newlines that are not inside a skipped span."""
+    cuts = [cut.span() for cut in STATEMENT_END.finditer(command)
+            if not any(covered(spans, cut.start()) for spans in skip)]
+    return list(zip([0] + [end for _, end in cuts], [start for start, _ in cuts] + [len(command)]))
+
+
+def commit_dir(command: str, commit: re.Match, cwd: str, text: list[list[tuple[int, int]]]) -> Path:
+    """Where a commit runs: the session's cwd, then each `cd` before it that is not text (quoted or in a
+    heredoc body), then its `git -C`."""
+    cds = [cd.group(1) for cd in CD.finditer(command, 0, commit.start())
+           if not any(covered(spans, cd.end() - 1) for spans in text)]
+    directory = Path(cwd or ".")
+    for target in cds + GIT_DIR.findall(commit.group(0)):
+        directory = directory / os.path.expanduser(unquote(target))
+    return directory
+
+
+def message_source(command: str, commit: re.Match, message_file: str, statements: list[tuple[int, int]]) -> str:
+    """The text that supplies a message the gate cannot read: the commit's own statement for `-F -` (the
+    pipe into it, a heredoc after it), or the statements before it that write its -F file."""
+    if message_file == "-":
+        start, end = statements[bisect.bisect_right(statements, (commit.end(), float("inf"))) - 1]
+        return command[start:end]
+    writes = re.compile(r"(?:>>?|\btee\b(?:[ \t]+-a)?)[ \t]*['\"]?" + re.escape(message_file) + r"['\"]?(?![\w./-])")
+    return "\n".join(command[start:end] for start, end in statements
+                     if end <= commit.start() and writes.search(command, start, end))
+
+
+def commit_message(args: str, directory: Path) -> str | None:
+    """The message from -F <file>, -F - with a heredoc, or -m; None when -F names one the gate cannot read."""
     message_file = MESSAGE_FILE.search(args)
-    if message_file and message_file.group(2) != "-":
-        path = Path(cwd or ".") / message_file.group(2)
-        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    if message_file and unquote(message_file.group(1)) != "-":
+        path = directory / os.path.expanduser(unquote(message_file.group(1)))
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
     if message_file:
         heredoc = HEREDOC_START.search(args)
-        return args[heredoc.end():] if heredoc else ""
+        return args[heredoc.end():] if heredoc else None
     flag = MESSAGE_FLAG.search(args)
     rest = args[flag.end():] if flag else ""
     inline = INLINE_HEREDOC.match(rest)
     return rest[inline.end():] if inline else rest
 
 
-def fix_commit_without_evidence(command: str, cwd: str) -> bool:
-    commit = GIT_COMMIT.search(command)
-    message = commit_message(command[commit.end():], cwd).strip() if commit else ""
-    subject = message.splitlines()[0].strip() if message else ""
-    return bool(FIX_SUBJECT.match(subject)) and not EVIDENCE_LINE.search(message)
+def commit_reason(command: str, cwd: str) -> str:
+    """The reason to deny a fix: commit in the command that has no Evidence: line, or ""."""
+    commits = list(itertools.islice(GIT_COMMIT.finditer(command), MAX_COMMITS + 1))
+    if not commits:
+        return ""
+    if len(commits) > MAX_COMMITS:
+        return f"sdlc-gate: this command holds more than {MAX_COMMITS} git commits, too many to check. Split it."
+    heredocs = heredoc_spans(command)
+    bodies = [(body_start, body_end) for _, body_start, body_end in heredocs]
+    quoted = [quote.span() for quote in QUOTED.finditer(command)]
+    statements = statement_spans(command, [quoted, [(head, body_end) for head, _, body_end in heredocs]])
+    commits = [commit for commit in commits if not covered(bodies, commit.end() - 1)]
+    ends = [commit.start() for commit in commits[1:]] + [len(command)]
+    for commit, end in zip(commits, ends):
+        args = command[commit.end():end]
+        message = commit_message(args, commit_dir(command, commit, cwd, [quoted, bodies]))
+        if message is None:
+            source = message_source(command, commit, unquote(MESSAGE_FILE.search(args).group(1)), statements)
+            unchecked = LOOSE_FIX.search(source) and not LOOSE_EVIDENCE.search(source)
+        else:
+            subject = message.strip().splitlines()[0].strip() if message.strip() else ""
+            unchecked = FIX_SUBJECT.match(subject) and not EVIDENCE_LINE.search(message)
+        if unchecked:
+            return EVIDENCE_REASON
+    return ""
 
 
 def writes_files(command: str) -> bool:
@@ -247,10 +342,9 @@ def bash_reason(data: dict, command: str) -> str:
     if agent in READ_ONLY_AGENTS and len(command) > MAX_CHECKED_COMMAND:
         return (f"sdlc-gate: {agent} is read-only, and this command is too long to check "
                 f"({len(command)} characters). Split it into shorter read-only commands.")
-    if fix_commit_without_evidence(command, str(data.get("cwd", ""))):
-        return ("sdlc-gate: a fix: commit needs an `Evidence:` line in its body: a log line quoted "
-                "with its file and line, or the name of a check that failed before the change. "
-                "Write only evidence you observed.")
+    commit = commit_reason(command, str(data.get("cwd", "")))
+    if commit:
+        return commit
     if agent in READ_ONLY_AGENTS and writes_files(command):
         return (f"sdlc-gate: {agent} is read-only, and this command can change files or git state. "
                 "Use read-only commands (git diff, git log, grep, the scanners).")

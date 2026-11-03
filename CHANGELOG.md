@@ -2,6 +2,29 @@
 
 All notable changes, newest first. Versions follow [semver](https://semver.org): a change that alters how an agent or a gate behaves is a minor version, and a wording fix is a patch.
 
+## 0.2.1 (2026-11-03)
+
+Fixes from a code review of 0.2.0. Each code fix has a test that failed before it.
+
+- Gate hooks:
+  - The `Evidence:` check reads a `-F` message file from where the commit runs, after a `cd` or `git -C`, and checks every `git commit` in a command, not only the first.
+  - When the gate cannot read the message (piped into `-F -`, or a `-F` file the same command writes first), it checks the text that supplies it: the pipe or heredoc into `-F -`, or the statement that writes the file. A `fix:` elsewhere in the command, or a command that only mentions `git commit -F`, is not affected.
+  - A `git commit` line inside a heredoc body is text, not a commit. A `cd` inside quotes or a heredoc body does not move the message file. An empty heredoc and `$((1 << 3))` no longer hide later commits, and a `\` line continuation does not cut a statement.
+  - The command is parsed only when it holds a `git commit`, and in linear time: heredoc bodies are found by scanning lines, not by one lazy regex. A command with more than 50 commits is denied as too many to check. Timing tests feed 150k to 300k characters of hostile input, and each is answered in well under the 5-second hook timeout.
+  - `/sdlc off` in a session that is not gated no longer starts a run and locks it.
+  - A `plan.md` that appears after the approval locks code edits, like one that changed.
+  - Read-only agents may no longer create or copy a branch (`git branch <name>`, `-c`, `-C`, `-f`, `-u`, `-t`).
+- `scripts/check.sh` checks that both hook events are wired, and reports `PARTIAL` as a problem when only one is.
+- `scripts/rate_lesson.py`:
+  - A run that skipped its paid graders, or an eval that stopped early, rates `confounded`.
+  - `hurt` on a promoted lesson says to revert its text in the agent.
+  - The confidence line tolerates trailing spaces.
+  - Files are read and written as UTF-8.
+- README: the rating command grants `--allow-tools Bash Write Edit`. Without it every run fails, and the rating is meaningless.
+- `/sdlc` Build:
+  - Repaired test setup does not count against the one-test-file limit.
+  - A file left because its repair needs a choice goes to the owner, not to a builder.
+
 ## 0.2.0 (2026-11-03)
 
 Gates that hold without the model's reading of a reply.

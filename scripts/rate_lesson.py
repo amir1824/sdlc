@@ -41,12 +41,16 @@ def arm_runs(result, case_name):
     fail(f"no case named {case_name} in the result")
 
 
-def verdict(with_runs, without_runs):
+def verdict(with_runs, without_runs, partial):
     with_pass = sum(1 for run in with_runs if run.get("passed"))
     without_pass = sum(1 for run in without_runs if run.get("passed"))
     counts = f"with {with_pass}/{len(with_runs)}, without {without_pass}/{len(without_runs)}"
     if any(run.get("error") for run in with_runs + without_runs):
         return "confounded", f"{counts}, a run errored"
+    if any(run.get("skippedPaidGraders") for run in with_runs + without_runs):
+        return "confounded", f"{counts}, a run skipped its paid graders"
+    if partial:
+        return "confounded", f"{counts}, the eval stopped early"
     if min(len(with_runs), len(without_runs)) < MIN_RUNS:
         return "confounded", f"{counts}, fewer than {MIN_RUNS} runs in an arm"
     gap = Fraction(with_pass, len(with_runs)) - Fraction(without_pass, len(without_runs))
@@ -88,35 +92,43 @@ def main():
     args = parser.parse_args()
 
     try:
-        result = json.loads(args.result.read_text())
-        text = args.lessons.read_text()
+        result = json.loads(args.result.read_text(encoding="utf-8"))
+        text = args.lessons.read_text(encoding="utf-8")
     except (OSError, ValueError) as err:
         fail(str(err))
     lesson_id = args.lesson.upper()
     pair = f"lesson-{lesson_id.lower()}"
-    rating, detail = verdict(arm_runs(result, f"{pair}-with"), arm_runs(result, f"{pair}-without"))
+    rating, detail = verdict(arm_runs(result, f"{pair}-with"), arm_runs(result, f"{pair}-without"),
+                             bool(result.get("partial")))
 
     lines = text.split("\n")
     start, end = section_bounds(lines, lesson_id)
     used = field_index(lines, start, end, "used")
     key = f"eval {pair} {result.get('startedAt', 'unknown')[:16]}"
     changed = {used: add_used_entry(lines[used], key, f"{key}: {rating} ({detail})")}
+    was_promoted = False
     if rating == "hurt":
-        changed[field_index(lines, start, end, "status")] = "- status: retired"
-    if rating == "helped" and lines[field_index(lines, start, end, "confidence")] == "- confidence: low":
-        changed[field_index(lines, start, end, "confidence")] = "- confidence: medium"
+        status = field_index(lines, start, end, "status")
+        was_promoted = lines[status].startswith("- status: promoted")
+        changed[status] = "- status: retired"
+    if rating == "helped":
+        confidence = field_index(lines, start, end, "confidence")
+        if lines[confidence].rstrip() == "- confidence: low":
+            changed[confidence] = "- confidence: medium"
     for i, line in changed.items():
         lines[i] = line
 
     target = args.lessons.resolve()
     fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".LESSONS.", suffix=".tmp")
-    with os.fdopen(fd, "w") as out:
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
         out.write("\n".join(lines))
     os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))
     os.replace(tmp, target)
     print(f"{lesson_id}: {rating} ({detail})")
     for i in sorted(changed):
         print(f"  {lines[i]}")
+    if was_promoted:
+        print(f"  {lesson_id} was promoted: revert its text in the agent or skill it was written into.")
 
 
 if __name__ == "__main__":

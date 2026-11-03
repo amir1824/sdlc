@@ -131,6 +131,10 @@ class PromptTest(GateTest):
         self.prompt("/sdlc off")
         self.assertFalse(self.lock.exists())
 
+    def test_slash_sdlc_off_in_an_ungated_session_does_not_lock(self):
+        self.prompt("/sdlc off")
+        self.assertFalse(self.lock.exists())
+
     def test_unsafe_session_id_writes_no_state(self):
         done = self.prompt("/sdlc add a slug helper", session_id="../escape")
         self.assertEqual(list(self.tmp.rglob("*.locked")), [])
@@ -188,6 +192,14 @@ class FileEditTest(GateTest):
         done = self.edit(self.project / "text.py")
         self.assertIn(".sdlc/feature/plan.md changed after the owner approved it", self.reason(done))
 
+    def test_plan_added_after_approval_locks_again(self):
+        self.locked_and_approved()
+        second = self.project / ".sdlc" / "second" / "plan.md"
+        second.parent.mkdir()
+        second.write_text("# A plan nobody approved\n")
+        done = self.edit(self.project / "text.py")
+        self.assertIn(".sdlc/second/plan.md changed after the owner approved it", self.reason(done))
+
     def test_plan_deleted_after_approval_locks_again(self):
         self.locked_and_approved()
         self.plan.unlink()
@@ -243,6 +255,111 @@ class CommitTest(GateTest):
     def test_fix_commit_from_a_message_file_without_evidence_is_denied(self):
         (self.project / "msg.txt").write_text("fix: guard the empty title\n\nNo proof here.\n")
         done = self.bash("git commit -F msg.txt")
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_fix_commit_from_a_message_file_after_cd_without_evidence_is_denied(self):
+        (self.project / "sub").mkdir()
+        (self.project / "sub" / "msg.txt").write_text("fix: guard the empty title\n")
+        done = self.bash("cd sub && git commit -F msg.txt")
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_fix_commit_from_a_message_file_through_git_c_without_evidence_is_denied(self):
+        (self.project / "sub").mkdir()
+        (self.project / "sub" / "msg.txt").write_text("fix: guard the empty title\n")
+        done = self.bash("git -C sub commit -F msg.txt")
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_fix_commit_from_a_message_file_after_cd_with_evidence_is_allowed(self):
+        (self.project / "sub").mkdir()
+        (self.project / "sub" / "msg.txt").write_text("fix: guard\n\nEvidence: api.log:12\n")
+        done = self.bash("cd sub && git commit -F msg.txt")
+        self.assertEqual(done.stdout, "")
+
+    def test_an_unreadable_message_file_with_no_fix_in_the_command_is_allowed(self):
+        done = self.bash("git commit -F missing.txt")
+        self.assertEqual(done.stdout, "")
+
+    def test_a_command_that_only_mentions_a_commit_is_allowed(self):
+        done = self.bash("grep -n 'git commit -F msg.txt' README.md")
+        self.assertEqual(done.stdout, "")
+
+    def test_a_piped_fix_message_without_evidence_is_denied(self):
+        done = self.bash("printf 'fix: guard' | git commit -F -")
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_piped_fix_message_with_evidence_is_allowed(self):
+        done = self.bash("printf 'fix: guard\\n\\nEvidence: api.log:12' | git commit -F -")
+        self.assertEqual(done.stdout, "")
+
+    def test_a_fix_message_file_written_in_the_same_command_is_checked(self):
+        done = self.bash("printf 'fix: guard' > m.txt && git commit -F m.txt")
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_fix_heredoc_piped_into_a_commit_without_evidence_is_denied(self):
+        done = self.bash("cat <<'EOF' | git commit -F -\nfix: guard\nEOF")
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_fix_body_that_mentions_git_commit_before_its_evidence_is_allowed(self):
+        done = self.bash("git commit -F - <<EOF\nfix: stop the double write\n\nthe hook ran\n"
+                         "git commit twice in one turn\n\nEvidence: api.log:12\nEOF")
+        self.assertEqual(done.stdout, "")
+
+    def test_a_fix_word_elsewhere_in_the_command_does_not_count(self):
+        done = self.bash('git log --grep="fix:" --oneline; git commit -F -')
+        self.assertEqual(done.stdout, "")
+
+    def test_a_commit_mentioned_in_a_pr_body_heredoc_is_not_checked(self):
+        done = self.bash('gh pr create --title "fix: x" --body "$(cat <<EOF\nrun\ngit commit -F msg\nEOF\n)"')
+        self.assertEqual(done.stdout, "")
+
+    def test_evidence_of_another_commit_does_not_cover_a_piped_fix(self):
+        done = self.bash('git commit -m "fix: a" -m "Evidence: l:1" && printf "fix: b" | git commit -F -')
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_cd_inside_quotes_does_not_move_the_message_file(self):
+        (self.project / "sub").mkdir()
+        (self.project / "sub" / "m.txt").write_text("fix: guard\n")
+        (self.project / "m.txt").write_text("chore: tidy\n")
+        done = self.bash('echo "; cd sub" && git commit -F m.txt')
+        self.assertEqual(done.stdout, "")
+
+    def test_many_commits_in_one_command_are_answered_before_the_hook_timeout(self):
+        done = self.bash("git commit -F -;" * 6000)
+        self.assertIn("too many to check", self.reason(done))
+
+    def test_a_long_unterminated_heredoc_header_is_answered_before_the_hook_timeout(self):
+        done = self.bash('git commit -m "chore: tidy"; cat <<' + "A" * 150000)
+        self.assertEqual(done.stdout, "")
+
+    def test_many_heredoc_heads_on_one_line_are_answered_before_the_hook_timeout(self):
+        done = self.bash("git commit -F -; " + "<<A " * 75000)
+        self.assertEqual(done.stdout, "")
+
+    def test_an_empty_heredoc_does_not_hide_a_later_fix_commit(self):
+        done = self.bash('cat <<EOF\nEOF\ngit commit -m "fix: guard"')
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_shift_does_not_start_a_heredoc(self):
+        done = self.bash('echo $((1 << 3))\ngit commit -m "fix: guard"')
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_continued_pipe_into_a_commit_is_checked(self):
+        done = self.bash('printf "fix: guard" \\\n| git commit -F -')
+        self.assertIn("Evidence:", self.reason(done))
+
+    def test_a_cd_inside_a_heredoc_body_does_not_move_the_message_file(self):
+        (self.project / "sub").mkdir()
+        (self.project / "sub" / "m.txt").write_text("fix: guard\n")
+        (self.project / "m.txt").write_text("chore: tidy\n")
+        done = self.bash("cat > notes <<EOF\nx\ncd sub\nEOF\ngit commit -F m.txt")
+        self.assertEqual(done.stdout, "")
+
+    def test_a_long_run_of_fix_parens_is_answered_before_the_hook_timeout(self):
+        done = self.bash("printf '" + "fix(" * 60000 + "' | git commit -F -")
+        self.assertEqual(done.stdout, "")
+
+    def test_a_second_fix_commit_in_one_command_is_checked(self):
+        done = self.bash('git commit -m "chore: tidy" && git commit --amend -m "fix: guard"')
         self.assertIn("Evidence:", self.reason(done))
 
     def test_evidence_inside_the_subject_does_not_count(self):
@@ -316,6 +433,18 @@ class ReadOnlyAgentTest(GateTest):
     def test_deleting_a_branch_is_denied(self):
         done = self.bash("git branch -D old", agent_type="tech-lead")
         self.assertIn("tech-lead is read-only", self.reason(done))
+
+    def test_creating_a_branch_is_denied(self):
+        done = self.bash("git branch review-notes", agent_type="brutal-reviewer")
+        self.assertIn("brutal-reviewer is read-only", self.reason(done))
+
+    def test_copying_a_branch_is_denied(self):
+        done = self.bash("git branch -c main main-copy", agent_type="brutal-reviewer")
+        self.assertIn("brutal-reviewer is read-only", self.reason(done))
+
+    def test_listing_branches_is_allowed(self):
+        done = self.bash("git branch -a && git branch --merged main --contains abc123", agent_type="tech-lead")
+        self.assertEqual(done.stdout, "")
 
     def test_perl_in_place_edit_is_denied(self):
         done = self.bash("perl -pi -e 's/a/b/' f.txt", agent_type="tech-lead")

@@ -5,6 +5,7 @@ The result JSON copies the fields `claude plugin eval --json` writes (cases[].na
 cases[].arms.with[].passed and .error, startedAt); a change to that format is not caught here.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -32,8 +33,8 @@ LESSONS = f"""# Lessons
 {L2}"""
 
 
-def run(passed, error=None):
-    return {"passed": passed, "error": error}
+def run(passed, error=None, skipped=False):
+    return {"passed": passed, "error": error, "skippedPaidGraders": skipped}
 
 
 def case(name, runs):
@@ -48,8 +49,9 @@ class RateLessonTest(unittest.TestCase):
         self.lessons.write_text(LESSONS)
         self.result = self.tmp / "result.json"
 
-    def rate_result(self, cases, lesson="L1"):
-        self.result.write_text(json.dumps({"startedAt": "2026-11-03T02:10:41.000Z", "cases": cases}))
+    def rate_result(self, cases, lesson="L1", partial=False):
+        self.result.write_text(json.dumps({"startedAt": "2026-11-03T02:10:41.000Z", "partial": partial,
+                                           "cases": cases}))
         return subprocess.run([sys.executable, "-I", str(SCRIPT), str(self.result), lesson,
                                "--lessons", str(self.lessons)], capture_output=True, text=True, timeout=10)
 
@@ -103,6 +105,27 @@ class RateLessonTest(unittest.TestCase):
         self.rate([run(True)] * 2, [run(False)] * 2)
         self.assertIn("confounded (with 2/2, without 0/2, fewer than 3 runs in an arm)",
                       self.lessons.read_text())
+
+    def test_a_run_that_skipped_its_paid_graders_is_confounded(self):
+        self.rate([run(True)] * 3, [run(True), run(False), run(False, skipped=True)])
+        self.assertIn("confounded (with 3/3, without 1/3, a run skipped its paid graders)",
+                      self.lessons.read_text())
+
+    def test_a_partial_result_is_confounded(self):
+        self.rate_result([case("lesson-l1-with", [run(True)] * 3),
+                          case("lesson-l1-without", [run(False)] * 3)], partial=True)
+        self.assertIn("confounded (with 3/3, without 0/3, the eval stopped early)", self.lessons.read_text())
+
+    def test_hurt_on_a_promoted_lesson_says_to_revert_the_agent_text(self):
+        self.lessons.write_text(LESSONS.replace("- status: library", "- status: promoted (backend-developer)", 1))
+        out = self.rate([run(False)] * 3, [run(True)] * 3)
+        self.assertIn("- status: retired", self.lessons.read_text())
+        self.assertIn("revert", out.stdout)
+
+    def test_confidence_with_a_trailing_space_is_raised(self):
+        self.lessons.write_text(LESSONS.replace("- confidence: low", "- confidence: low ", 1))
+        self.rate([run(True)] * 3, [run(False)] * 3)
+        self.assertIn("- confidence: medium", self.lessons.read_text())
 
     def test_confounded_changes_neither_confidence_nor_status(self):
         self.rate([run(True)] * 3, [run(False, "timeout")] * 3)
@@ -165,6 +188,15 @@ class RateLessonTest(unittest.TestCase):
                               "--lessons", str(self.lessons)], capture_output=True, text=True, timeout=10)
         self.assertEqual(out.returncode, 2)
         self.assertEqual(self.lessons.read_text(), LESSONS)
+
+    def test_a_non_utf8_locale_still_reads_and_writes_the_lessons_file(self):
+        self.result.write_text(json.dumps({"startedAt": "2026-11-03T02:10:41.000Z", "cases": [
+            case("lesson-l1-with", [run(True)] * 3), case("lesson-l1-without", [run(False)] * 3)]}))
+        out = subprocess.run([sys.executable, "-I", str(SCRIPT), str(self.result), "L1", "--lessons", str(self.lessons)],
+                             capture_output=True, text=True, timeout=10,
+                             env={**os.environ, "LC_ALL": "en_US.US-ASCII"})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("## L1 · backend-developer · INV\n- cue", self.lessons.read_text(encoding="utf-8"))
 
     def test_missing_lessons_file_is_an_error(self):
         self.lessons.unlink()

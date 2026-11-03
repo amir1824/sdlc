@@ -26,8 +26,16 @@ for f in "$repo"/plugins/sdlc/agents/*.md; do check "$f" "$dest/agents"; done
 for f in "$repo"/plugins/sdlc/commands/*.md; do check "$f" "$dest/commands"; done
 
 gate="$repo/plugins/sdlc/hooks/sdlc_gate.py"
-if grep -qF "$gate" "$dest/settings.json" 2>/dev/null; then hooks=linked; else hooks=missing; fi
-printf '%-8s %s\n' "$hooks" "settings.json hooks -> plugins/sdlc/hooks/sdlc_gate.py"
+wired=0 # both events are needed: the prompt hook sets the lock that the tool hook enforces
+for mode in prompt tool; do
+  if grep -qF -e "$gate $mode" -e "$gate\\\" $mode" "$dest/settings.json" 2>/dev/null; then wired=$((wired + 1)); fi
+done
+case "$wired" in
+  2) hooks=linked ;;
+  0) hooks=missing ;;
+  *) hooks=PARTIAL; drift=$((drift + 1)) ;;
+esac
+printf '%-8s %s\n' "$hooks" "settings.json hooks (prompt and tool) -> plugins/sdlc/hooks/sdlc_gate.py"
 
 version_of() { sed -n 's/.*"version": "\(.*\)".*/\1/p' "$1" | head -1; }
 plugin_version="$(version_of "$repo/plugins/sdlc/.claude-plugin/plugin.json")"

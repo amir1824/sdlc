@@ -43,8 +43,8 @@ The plan carries a requirement map (every requirement ID to its files and its pr
 
 **3. Gate hooks** (`plugins/sdlc/hooks/`). A rule in a prompt holds only while the model reads it the way you meant, so the gates that must hold are hooks:
 
-- **No code before the plan is approved.** Typing `/sdlc` locks code edits (Edit, Write, MultiEdit, NotebookEdit) in that session's project; files under `.sdlc/` stay writable. Typing `approve plan` or `אשר תוכנית` unlocks them, logs your words in `~/.claude/sdlc-gate/approvals.log`, and binds the approval to the hash of each `.sdlc/*/plan.md`: if a plan changes afterwards, code edits lock again until you approve it again. Any other reply, however positive, leaves the lock in place. `sdlc off` releases the session, for a LOW change you decide to do outside the pipeline.
-- **`Evidence:` on `fix:` commits.** A `git commit` whose subject is `fix:` or `fix(scope):` and whose message has no `Evidence:` line is denied.
+- **No code before the plan is approved.** Typing `/sdlc` locks code edits (Edit, Write, MultiEdit, NotebookEdit) in that session's project; files under `.sdlc/` stay writable. Typing `approve plan` or `אשר תוכנית` unlocks them, logs your words in `~/.claude/sdlc-gate/approvals.log`, and binds the approval to the hash of each `.sdlc/*/plan.md`: if a plan changes, or a new one appears, afterwards, code edits lock again until you approve again. Any other reply, however positive, leaves the lock in place. `sdlc off` releases the session, for a LOW change you decide to do outside the pipeline.
+- **`Evidence:` on `fix:` commits.** A `git commit` whose subject is `fix:` or `fix(scope):` and whose message has no `Evidence:` line is denied. Every commit in the command is checked, and a `-F` file is read from where the commit runs (after a `cd` or `git -C`). When it cannot read the message (piped into `-F -`, or a `-F` file the same command writes first), it checks the text that supplies it, the pipe or heredoc into `-F -` or the statement that writes the file, for a `fix:` subject and an `Evidence:` line.
 - **Read-only agents stay read-only, on a best-effort basis.** A Bash command from `tech-lead`, `security-reviewer`, `brutal-reviewer`, `analyst` or `leak-scanner` is denied when it matches a list of the common ways to write: a redirect into a file, `rm`/`mv`/`cp` and their kin, `sh -c`, in-place `sed` or `perl`, an install, `find -delete`, or a git command that changes state. It is a denylist, not a sandbox: `python3 -c` or `$(...)` gets through.
 
 The gates stop a reply that was misread, not an agent set on getting past them. They need `python3` (3.9 or later) and fail open: an error or a timeout lets the action through, and `SDLC_GATE=off` turns them off. What they do not cover: a file written through Bash in a locked session, the gate's state in `~/.claude/sdlc-gate/`, which Bash can delete, and a run resumed in a new session, which needs `approve plan` typed again. `SDLC_GATE_TRACE=1` logs what Claude Code sends each hook to `~/.claude/sdlc-gate/trace.log`.
@@ -100,7 +100,7 @@ Some gates call skills from other plugins: `idea-slayer` and `architecture-slaye
 
 - **At Plan,** `tech-lead` reads `~/.claude/lessons/LESSONS.md` when it exists. It applies the lessons whose cue fits the change, skipping `proposed` and `retired` ones, and verifies their facts first.
 - **At the retro,** each lesson the plan used gets a row: what it changed and what was observed. One run has no contrast, so the row is rated `confounded`. At most one new lesson is added, as `proposed`, and `tech-lead` does not apply it until you accept it.
-- **An A/B eval rates a lesson:** the same case run with the lesson in the builder's plan and without it. `hurt` retires the lesson, and `helped` raises its confidence to medium.
+- **An A/B eval rates a lesson:** the same case run with the lesson in the builder's plan and without it. `hurt` retires the lesson, and `helped` raises its confidence to medium. A promoted lesson that is later rated `hurt` also needs its text reverted in the agent it was written into; the script says so.
 - **Agent files** never change from a run. Promoting a lesson into an agent needs `helped` from its A/B eval, and your yes.
 
 To start a library, create the file with entries like this (an entry you write yourself can start as `library`; one the retro adds starts as `proposed`):
@@ -118,10 +118,10 @@ To start a library, create the file with entries like this (an entry you write y
 To rate a lesson:
 
 1. In your plugin's eval suite, write two cases named `lesson-<id>-with` and `lesson-<id>-without`. They share the prompt, the graders and the scaffold, and differ only in the lesson's line in the builder's plan. The graders check the operation the lesson names, for example that no file still calls the old signature.
-2. Run both, at least 3 runs each:
+2. Run both, at least 3 runs each. Grant the tools the builder edits with: without `--allow-tools`, every run of both arms fails, and the rating says `no observed effect` about nothing. Add `--trust-plugin` when the run cannot stop to ask, and export `SDLC_GATE=off` when a case's prompt starts with `/sdlc`.
 
    ```bash
-   claude plugin eval <plugin> --case 'lesson-l1-*' --scaffold --ablation none --json result.json
+   claude plugin eval <plugin> --case 'lesson-l1-*' --scaffold --ablation none --allow-tools Bash Write Edit --json result.json
    ```
 
 3. Write the rating to the library, from a clone of this repo (the plugin does not install scripts):
@@ -130,7 +130,7 @@ To rate a lesson:
    python3 -I scripts/rate_lesson.py result.json L1
    ```
 
-   It counts the runs that passed in each arm. A gap of at least half in pass rate is `helped` or `hurt`, and a smaller gap is `no observed effect`. An errored run, or fewer than 3 runs in an arm, is `confounded`.
+   It counts the runs that passed in each arm. A gap of at least half in pass rate is `helped` or `hurt`, and a smaller gap is `no observed effect`. An errored run, a run that skipped its paid graders, an eval that stopped early, or fewer than 3 runs in an arm is `confounded`.
 
 ## Versions
 
