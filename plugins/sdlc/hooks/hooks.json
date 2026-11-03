@@ -1,0 +1,20 @@
+{
+  "description": "sdlc gates: no code before the owner approves the plan, Evidence: on fix commits, read-only review agents stay read-only",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py\" prompt", "timeout": 5 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py\" tool", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

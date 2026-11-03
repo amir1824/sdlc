@@ -13,7 +13,7 @@ Scope: $ARGUMENTS
 
 Then merge their reports into one:
 
-1. One status line: `Status: BLOCK` if either agent reported BLOCK or LEAKS, otherwise `Status: PASS`.
+1. One status line. `Status: BLOCK` when either agent reported BLOCK or LEAKS. `Status: PASS` only when every agent this scope runs returned its own explicit pass: `Status: PASS` from security-reviewer and `Status: CLEAN` from leak-scanner. Anything else is `Status: INCOMPLETE`, followed by the agent and the reason: an agent that failed or timed out, one that stopped without a Status line (security-reviewer does when it gets no diff), or a reply in a format you cannot read. INCOMPLETE is never reported as PASS.
 2. Findings from both, sorted Critical, High, Medium, Low. When both found the same `file:line`, keep one and note that both agents found it.
 3. Each agent's Scanners and Not covered sections, as-is.
 

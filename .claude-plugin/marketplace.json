@@ -10,8 +10,8 @@
     {
       "name": "sdlc",
       "source": "./plugins/sdlc",
-      "description": "A risk-tiered SDLC for Claude Code: 14 role agents and the /sdlc, /brutal-review and /security-audit commands.",
-      "version": "0.1.0"
+      "description": "A risk-tiered SDLC for Claude Code: 14 role agents, the /sdlc, /brutal-review and /security-audit commands, and gate hooks.",
+      "version": "0.2.0"
     }
   ]
 }

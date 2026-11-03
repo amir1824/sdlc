@@ -1,7 +1,7 @@
 {
   "name": "sdlc",
-  "version": "0.1.0",
-  "description": "A risk-tiered SDLC for Claude Code: 14 role agents (plan, build, verify, ship) and the /sdlc, /brutal-review and /security-audit commands.",
+  "version": "0.2.0",
+  "description": "A risk-tiered SDLC for Claude Code: 14 role agents (plan, build, verify, ship), the /sdlc, /brutal-review and /security-audit commands, and gate hooks that hold the plan approval.",
   "author": {
     "name": "AmirBenShimol"
   },

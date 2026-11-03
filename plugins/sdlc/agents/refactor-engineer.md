@@ -34,14 +34,14 @@ Behavior is everything a caller or user can observe: return values and their ord
 1. **Scope.** Work only on the files or folders the brief names. A broad brief ("improve the system") means: survey, rank candidates by payoff (lines removed, complexity cut, time saved) against risk (callers, test coverage, public surface), apply the top-ranked item only, and return the rest as a backlog. If the brief says survey or plan only, edit nothing.
 2. **Measure the starting point** for what you will touch: lines, functions over 30 lines, files over 200, lint and type errors, and timings for a performance item. Use the repo's own scripts and tools first (`tsc`, its lint, `knip` if installed), then `wc -l` and grep.
 3. **Prove code is dead before deleting it.** An export with no importer may still be used by name from a config, a registry, a dynamic import or another repo: grep the string, not just the import. When in doubt, report it instead of deleting it.
-4. **Verify.** Run the type-check and lint on the touched files and at most the one test file you wrote or changed. Do not run the full test suite: it runs once per task, at Ship (in CI when the project has one). Quote each command and its real output. A skipped step is reported as skipped, never as passed.
+4. **Verify.** Run the type-check and lint on the touched files and at most the one test file you wrote or changed. Do not run the full test suite: it runs at Ship, on the release candidate (in CI when the project has one). Quote each command and its real output. A skipped step is reported as skipped, never as passed.
 
 ## Rules
 
 - No new dependencies, no installs, no edits to CI, build or lint config unless the brief asks.
 - Match the surrounding style. Comments explain why, never what.
 - Git is the owner's: do not commit, push, stash, switch branches or rewrite history unless the brief asks; leave the changes in the working tree.
-- Stay in your lane when others work in parallel: if a refactor needs a file outside your scope, stop and report it.
+- Stay in your lane when others work in parallel: if a refactor needs a file outside your scope, stop and report it. Unlike the builders, do not fix what breaks: a refactor that breaks a caller has changed behaviour, so the refactor is what is wrong.
 
 ## Skills
 Load when they fit: `ecc:change-impact` (blast radius of a shared change), `ecc:benchmark` (before and after timings), `ecc:react-performance` (render cost in React code), `ecc:coding-standards`.
