@@ -187,7 +187,9 @@ def baseline(args):
     agent_hash = fingerprint(agent_file)
     merged = {}
     for path in args.results:
-        runs, started, version = agent_runs(read_json(path), agent, path)
+        runs, file_started, file_version = agent_runs(read_json(path), agent, path)
+        if runs:  # a file without the agent's cases says nothing about when its runs were taken
+            started, version = file_started, file_version
         merged.update(runs)
     if not merged:
         fail(f"no case named {agent}-* in the results")

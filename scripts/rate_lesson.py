@@ -18,8 +18,10 @@ with the installed file.
 --regression <before.json> checks a promotion instead of rating a pair: <result.json> is an
 eval of all of the edited agent's cases, <before.json> the same cases before the edit. A case
 both files hold, with at least 3 runs and no error or skipped paid grader in each, is judged; it dropped when its pass
-rate fell by half or more. The verdict (`ok`, `REGRESSED` or `confounded`) goes to the `used`
-line and nothing else in the lesson changes. The exit code is 0 only for `ok`.
+rate fell by half or more. A case <before.json> holds and <result.json> lacks makes the verdict
+`confounded`. The verdict (`ok`, `REGRESSED` or `confounded`) goes to the `used` line, under a key
+of the start time and the --agent names (two agents' records in one minute do not replace each
+other), and nothing else in the lesson changes. The exit code is 0 only for `ok`.
 
 The script ships in the sdlc repo, not in the plugin: run it from a clone.
 """
@@ -101,6 +103,9 @@ def regression_verdict(before, after):
         return "REGRESSED", ", ".join(dropped)
     if judged == 0:
         return "confounded", "no case judged"
+    missing = sorted(name for name in old_cases if name not in {case.get("name") for case in after.get("cases", [])})
+    if missing:
+        return "confounded", f"{judged} judged, but the result lacks {', '.join(missing)}"
     skipped = f", {unjudged} unjudged" if unjudged else ""
     if before.get("partial") or after.get("partial"):
         return "confounded", f"the eval stopped early, {judged} judged{skipped}, none dropped"
@@ -207,7 +212,8 @@ def main():
     except (OSError, ValueError) as err:
         fail(str(err))
     lesson_id = args.lesson.upper()
-    note = agents_note(list(dict.fromkeys(args.agent)))
+    agents = list(dict.fromkeys(args.agent))
+    note = agents_note(agents)
     started = result.get("startedAt", "unknown")[:16]
 
     if before is None:
@@ -217,7 +223,7 @@ def main():
         key = f"eval {pair} {started}"
     else:
         rating, detail = regression_verdict(before, result)
-        key = f"regression {started}"
+        key = " ".join(["regression", started, *(path.stem for path in agents)])
 
     lines = text.split("\n")
     start, end = section_bounds(lines, lesson_id)

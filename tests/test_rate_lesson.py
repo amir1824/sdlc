@@ -355,11 +355,23 @@ class RegressionTest(unittest.TestCase):
         self.assertIn('- status: promoted (backend-developer, "Fix it", 2026-11-03)', text)
         self.assertEqual(text.count("- confidence: low"), 2)
 
-    def test_cases_in_only_one_file_are_ignored(self):
-        before = self.write("before.json", [case("case-a", [run(True)] * 3), case("old", [run(True)] * 3)])
+    def test_a_case_only_in_the_result_is_ignored(self):
+        before = self.write("before.json", [case("case-a", [run(True)] * 3)])
         after = self.write("after.json", [case("case-a", [run(True)] * 3), case("new", [run(False)] * 3)])
         self.assertEqual(self.regress(before, after).returncode, 0)
         self.assertIn("(1 judged, none dropped)", self.used())
+
+    def test_a_baseline_case_missing_from_the_result_is_confounded(self):
+        before = self.write("before.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 3)])
+        after = self.write("after.json", [case("case-a", [run(True)] * 3)])
+        out = self.regress(before, after)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("confounded (1 judged, but the result lacks case-b)", self.used())
+
+    def test_a_drop_is_still_regressed_when_another_baseline_case_is_missing(self):
+        before = self.write("before.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 3)])
+        after = self.write("after.json", [case("case-a", [run(False)] * 3)])
+        self.assertIn("REGRESSED (case-a 3/3 -> 0/3)", self.regress(before, after).stdout)
 
     def test_no_case_in_common_is_confounded_and_exits_one(self):
         before = self.write("before.json", [case("old", [run(True)] * 3)])
@@ -416,6 +428,16 @@ class RegressionTest(unittest.TestCase):
         self.regress(before, after)
         self.regress(before, after)
         self.assertEqual(self.lessons.read_text().count("regression 2026-11-03T02:10:"), 1)
+
+    def test_records_for_two_agents_in_the_same_minute_are_both_kept(self):
+        first, second = self.tmp / "backend-developer.md", self.tmp / "qa-engineer.md"
+        first.write_text("v1")
+        second.write_text("v1")
+        before, after = self.pair([run(True)] * 3, [run(True)] * 3)
+        self.regress(before, after, "L1", "--agent", str(first))
+        self.regress(before, after, "L1", "--agent", str(second))
+        self.assertIn("regression 2026-11-03T02:10 backend-developer: ok", self.used())
+        self.assertIn("regression 2026-11-03T02:10 qa-engineer: ok", self.used())
 
     def test_it_follows_the_earlier_ratings(self):
         self.lessons.write_text(PROMOTED.replace("- used: none yet", "- used: eval lesson-l1 x: helped (a)", 1))

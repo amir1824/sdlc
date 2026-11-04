@@ -251,6 +251,12 @@ class SuiteTest(unittest.TestCase):
         self.assertEqual(text.count('"passed"'), 5)
         self.assertNotIn("timed out", text)
 
+    def test_the_start_time_is_that_of_the_last_file_holding_the_agents_cases(self):
+        first = self.write_result("one.json", [case("qa-engineer-flaky", [run()] * 5)], started="2026-11-01T10:00:00.000Z")
+        other = self.write_result("two.json", [case("tech-lead-plan", [run()] * 5)], started="2026-11-04T09:00:00.000Z")
+        self.baseline([first, other])
+        self.assertIn('"startedAt": "2026-11-01T10:00:00.000Z"', self.baseline_file().read_text())
+
     def test_a_case_with_an_errored_run_is_listed_for_a_rerun_and_exits_one(self):
         out = self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 4 + [run(error="timed out")])])])
         self.assertEqual(out.returncode, 1)

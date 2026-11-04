@@ -777,6 +777,22 @@ class ScopeTest(GateTest):
     def test_reaching_the_claude_folder_is_refused(self):
         self.refuses(self.block(".claude/**"), ".git or .claude")
 
+    def test_a_protected_folder_below_the_top_level_is_refused(self):
+        self.refuses(self.block("src/.claude/**"), ".git or .claude")
+
+    def test_a_folder_that_only_starts_like_a_protected_name_is_allowed(self):
+        self.approve_scoped("src/.github/**")
+        self.assertEqual(self.edit(self.project / "src" / ".github" / "ci.yml").stdout, "")
+
+    def test_a_failed_log_write_leaves_the_lock_on_and_records_no_approval(self):
+        self.scoped("src/**")
+        self.prompt("/sdlc add a slug helper")
+        self.log.unlink(missing_ok=True)
+        self.log.mkdir()
+        self.prompt("approve plan")
+        self.assertTrue(self.lock.is_file())
+        self.assertFalse(self.approved.exists())
+
     def test_an_empty_block_is_refused(self):
         self.refuses(self.block("# nothing yet"), "block is empty")
 

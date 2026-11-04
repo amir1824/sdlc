@@ -237,6 +237,11 @@ def glob_match(glob: str, path: str) -> bool:
     return walk(0, 0)
 
 
+def is_broad(globs: list[str]) -> bool:
+    """Whether the patterns, taken together, match nearly every path of BROAD_SAMPLES."""
+    return sum(any(glob_match(glob, sample) for glob in globs) for sample in BROAD_SAMPLES) >= len(BROAD_SAMPLES) - 1
+
+
 def check_glob(glob: str) -> None:
     if len(glob) > SCOPE_MAX_ENTRY:
         raise ValueError(f"`{glob[:40]}...` is longer than {SCOPE_MAX_ENTRY} characters")
@@ -251,9 +256,9 @@ def check_glob(glob: str) -> None:
         raise ValueError(f"`{glob}` has an empty, `.` or `..` segment (a folder is `src/**`, not `src/`)")
     if parts.count("**") > 3:
         raise ValueError(f"`{glob}` has more than 3 `**` segments")
-    if sum(glob_match(glob, sample) for sample in BROAD_SAMPLES) >= len(BROAD_SAMPLES) - 1:
+    if is_broad([glob]):
         raise ValueError(f"`{glob}` matches nearly every file, which is no limit")
-    if parts[0].startswith(".") and any(word_match(fold(parts[0]), name) for name in PROTECTED_NAMES):
+    if any(part.startswith(".") and word_match(fold(part), name) for part in parts for name in PROTECTED_NAMES):
         raise ValueError(f"`{glob}` reaches .git or .claude (or .mcp.json), which no scope covers")
 
 
@@ -295,7 +300,7 @@ def parse_scope(text: str) -> list[str] | None:
         raise ValueError(f"its `sdlc-scope` block has more than {SCOPE_MAX_ENTRIES} patterns")
     for glob in globs:
         check_glob(glob)
-    if sum(any(glob_match(glob, sample) for glob in globs) for sample in BROAD_SAMPLES) >= len(BROAD_SAMPLES) - 1:
+    if is_broad(globs):
         raise ValueError("its patterns together match nearly every file, which is no limit; "
                          "name folders instead of a list of extensions")
     return globs
@@ -349,10 +354,10 @@ def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None 
     record = {"at": now(), "plans": plans}
     if globs is not None:
         record["scope"] = {"plan": target, "globs": globs}
+    line = log_event(data, "approve", text)  # logged before the approval takes effect: a log error leaves the lock on
+    log_event(data, "scope", f"{target or 'all plans'} scope={'none' if globs is None else len(globs)}")
     approved.write_text(json.dumps(record))
     lock.unlink(missing_ok=True)
-    line = log_event(data, "approve", text)
-    log_event(data, "scope", f"{target or 'all plans'} scope={'none' if globs is None else len(globs)}")
     limit = ("No `sdlc-scope` block was approved, so edits are not limited to a set of paths." if globs is None
              else f"Edits are limited to {len(globs)} pattern(s) from {target}: {', '.join(globs)}.")
     emit("UserPromptSubmit", system_message=f"sdlc-gate: plan approved. {limit}", additionalContext=(
