@@ -4,7 +4,30 @@ All notable changes, newest first. Versions follow [semver](https://semver.org):
 
 ## Unreleased
 
+- Eval suite: a frozen regression suite and a baseline per agent version. `scripts/suite.py freeze` records a hash of every file of each named case and never overwrites a manifest; `suite.py check` reports a case that changed or vanished after freezing, and, with `--baselines`, a baseline taken for another version of an agent file. `suite.py baseline` turns eval results into `<agent>-<hash>.json` (pass, error, cost and time of each run, in the shape `rate_lesson.py --regression` reads); a later result replaces a case's runs, and a case with an error, a skipped paid grader or fewer than 5 runs is listed as RERUN, as is (with `--manifest`) a frozen case of the agent that the results do not hold. The agent is taken from the agent file's name. A symlink inside a frozen case, and any unreadable or unwritable file, is an error (exit 2), never a crash. `scripts/check.sh` runs the check when `SDLC_EVALS` names the eval folder. The README and `/sdlc` describe the steps.
+- Retro: failures are tagged and counted per task. The retro gains a **Failures** table (Tag, Stage, Agent, Root cause, Evidence, Resolution) with a fixed tag list, one row per distinct failure of the task. `scripts/failures.py` reads the tables under the folders it is given and prints, for each tag and agent, the number of different tasks that hit it with each task's evidence; a failure found by several checks, or written twice in one retro, counts once. A tag outside the list, a row without 6 cells or an unreadable retro is a PROBLEM line and exit 1; a retro written before the table is not a problem. The tag list is in the script and in `commands/sdlc.md`, and a test pins that they agree.
+- Lessons library: a promotion is checked, and drift between the library and the installed agents is reported. Each fix has a test that failed before it.
+  - `scripts/rate_lesson.py --regression <before.json>` compares every eval case that two runs share. A case that fell by half or more in pass rate is `REGRESSED`; the verdict goes to the lesson's `used` line, the exit code is 1 unless it is `ok`, and the lesson's status and confidence do not change.
+  - `scripts/rate_lesson.py --agent <file>` (repeatable) records the agent file's name and a short hash in the entry, so a rating says which version of the agent it rated.
+  - `scripts/check_lessons.py`, called by `scripts/check.sh`, fails when a `promoted` lesson's quoted text is missing from an installed agent it names, and reports a rating whose agent file has changed since. It found `frontend-developer` without the L1 promotion (a local copy).
+  - `/sdlc` and the README describe the steps: run the agent's eval cases before and after the edit.
 - README: a diagram of the plugin (`docs/architecture.drawio`, rendered to `docs/architecture.png`). It shows the gate hooks and their state, the nine `/sdlc` stages with their agents and files, and the loop that improves the agents: the retro, the lessons library, the A/B rating, promotion into an agent file and the promotion check.
+
+## 0.3.0 (2026-11-03)
+
+The plan approval is bound to paths. Each fix has a test that failed before it; a few tests pin behaviour that already held.
+
+- Gate hooks:
+  - A plan can carry one `sdlc-scope` block (patterns relative to the project root). `approve plan` freezes it into the approval; afterwards only matching files can be edited with Edit, Write, MultiEdit or NotebookEdit, and a file outside it is denied with the way forward (add it to the plan, approve again). Files under `.sdlc/` stay writable. A plan without the block behaves as before.
+  - When more than one `.sdlc/*/plan.md` exists and one holds a scope block (or a fence that looks like one), the reply is `approve plan <folder>`; a plain `approve plan` is refused and lists the plans. With no scope block anywhere, plain `approve plan` works as before. Every plan stays bound by its hash. A trailing full stop after the folder name is punctuation.
+  - An approval is refused when the block cannot be read the way the owner reads it: an absolute path or `..`, a backslash, a control or invisible character, a pattern that matches nearly every file (alone or together), a first segment that can match `.git`, `.claude` or `.mcp.json`, an empty, unclosed or repeated block, a block inside another code fence, an indented or near-miss fence, more than 100 patterns.
+  - A scope never covers `.git`, `.claude` or `.mcp.json`, wherever they sit; an edit there is denied whatever the patterns say.
+  - A path written inside the project that resolves through a symlink to outside it is denied once a scope is frozen, also when the project directory is itself reached through a symlink. `[` and `]` in a pattern are plain characters.
+  - The scope check denies instead of failing open when it cannot read its record. A file path the gate cannot read (a NUL, a lone surrogate, a non-string) is denied while a run is locked or approved; before, it exited non-zero and the host allowed the edit. `SDLC_GATE_SCOPE=off` turns off only the scope check.
+  - A relative `file_path` is resolved against the session's `cwd`, not the hook's own directory; before, a relative path could slip past the lock. `NotebookEdit` is checked on both `file_path` and `notebook_path`. An approved record that is not a JSON object locks edits instead of crashing the hook.
+  - The approval and each refusal are also sent as a `systemMessage`, so the owner sees them.
+  - `approvals.log` records each approval's scope (`scope=none` when it is not path-limited) and each `deny-scope`.
+- `tech-lead`: its Output gains a **Scope** section. The `/sdlc` Plan and Build rows describe the approval words and what a builder does with a denied file.
 
 ## 0.2.1 (2026-11-03)
 

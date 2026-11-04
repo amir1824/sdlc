@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Report how ~/.claude compares with this repo (linked, same copy, drifted, missing),
 # whether settings.json wires the gate hooks, and that plugin.json and marketplace.json
-# carry the same version. A missing rule is a problem, since the plugin does not ship rules.
-# Exits non-zero on drift, a missing rule or a version mismatch. Reads only; writes nothing.
+# carry the same version, and, when a lessons library exists, that each promoted lesson's text is
+# in the installed agents it names (check_lessons.py). A missing rule is a problem, since the
+# plugin does not ship rules. Exits non-zero on drift, a missing rule, a version mismatch or a
+# promoted lesson missing from an installed agent, or, when SDLC_EVALS names an eval folder, a
+# frozen eval case that changed or is missing. Reads only; writes nothing.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,6 +46,17 @@ market_version="$(version_of "$repo/.claude-plugin/marketplace.json")"
 if [ "$plugin_version" != "$market_version" ]; then
   echo "version mismatch: plugin.json $plugin_version, marketplace.json $market_version"
   drift=$((drift + 1))
+fi
+
+lessons="$dest/lessons/LESSONS.md"
+if [ -f "$lessons" ]; then
+  python3 -I "$repo/scripts/check_lessons.py" --lessons "$lessons" --agents "$dest/agents" || drift=$((drift + 1))
+fi
+
+evals="${SDLC_EVALS:-}" # the eval folder of the plugin that holds suites/regression.json, e.g. my-agents-plugin/evals
+if [ -n "$evals" ] && [ -f "$evals/suites/regression.json" ]; then
+  python3 -I "$repo/scripts/suite.py" check "$evals/suites/regression.json" "$evals" \
+    --baselines "$evals/baselines" --agents-dir "$evals/../agents" || drift=$((drift + 1))
 fi
 
 echo "sdlc $plugin_version: $drift problem(s). 'missing' agents, commands and hooks are normal when the plugin is installed instead; a MISSING rule is not."

@@ -12,8 +12,8 @@ The idea is to use the lightest process the risk allows. A one-line UI fix goes 
 | `plugins/sdlc/commands/` | `/sdlc` (the full pipeline), `/brutal-review`, `/security-audit` |
 | `rules/` | 7 engineering rules for `~/.claude/rules/`: principles, code standards, architecture and state, quality and testing, the SDLC itself, debugging and governance, frontend |
 | `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`): no code before you approve the plan, `Evidence:` on `fix:` commits, read-only review agents stay read-only |
-| `scripts/` | `install.sh` (rules, and optionally agents and commands, into `~/.claude`), `check.sh` (drift, hook wiring and version check) and `rate_lesson.py` (a lesson's A/B eval rating, written to the lessons library) |
-| `tests/` | unit tests for the gate hooks and `rate_lesson.py` |
+| `scripts/` | `install.sh` (rules, and optionally agents and commands, into `~/.claude`), `check.sh` (drift, hook wiring, version check, and promoted lessons missing from an installed agent), `rate_lesson.py` (a lesson's A/B eval rating and the regression check of a promotion, written to the lessons library), `check_lessons.py` (the promoted-lesson check `check.sh` calls), `failures.py` (counts the different tasks that hit the same tagged failure, from their retros) and `suite.py` (freezes eval cases by hash, and keeps a baseline per agent version) |
+| `tests/` | unit tests for the gate hooks, `rate_lesson.py`, `check.sh`, `check_lessons.py`, `failures.py` and `suite.py` |
 | `docs/` | `architecture.drawio`, the diagram below, and `architecture.png`, its rendered image |
 
 ![The plugin's parts and how they connect: the gate hooks, the nine /sdlc stages, and the loop that improves the agents](docs/architecture.png)
@@ -48,11 +48,11 @@ The plan carries a requirement map (every requirement ID to its files and its pr
 
 **3. Gate hooks** (`plugins/sdlc/hooks/`). A rule in a prompt holds only while the model reads it the way you meant, so the gates that must hold are hooks:
 
-- **No code before the plan is approved.** Typing `/sdlc` locks code edits (Edit, Write, MultiEdit, NotebookEdit) in that session's project; files under `.sdlc/` stay writable. Typing `approve plan` or `אשר תוכנית` unlocks them, logs your words in `~/.claude/sdlc-gate/approvals.log`, and binds the approval to the hash of each `.sdlc/*/plan.md`: if a plan changes, or a new one appears, afterwards, code edits lock again until you approve again. Any other reply, however positive, leaves the lock in place. `sdlc off` releases the session, for a LOW change you decide to do outside the pipeline.
+- **No code before the plan is approved.** Typing `/sdlc` locks code edits (Edit, Write, MultiEdit, NotebookEdit) in that session's project; files under `.sdlc/` stay writable. Typing `approve plan` or `אשר תוכנית` unlocks them, logs your words in `~/.claude/sdlc-gate/approvals.log`, and binds the approval to the hash of each `.sdlc/*/plan.md`: if a plan changes, or a new one appears, afterwards, code edits lock again until you approve again. Any other reply, however positive, leaves the lock in place. When more than one `.sdlc/*/plan.md` exists and one of them holds a scope block, you reply `approve plan <folder>` to say which plan you approve. When that plan holds an `sdlc-scope` block (one pattern per line, relative to the project root), the approval freezes it: afterwards only matching files can be edited, and a file outside it is denied until you change the plan and approve again. A scope never covers `.git`, `.claude` or `.mcp.json`, wherever they sit. The gate refuses to approve a block it cannot read the way you do: a pattern that matches nearly every file, an absolute path or `..`, a control character, a block inside another code fence, more than one block. A plan without the block is not path-limited, and the log says `scope=none`. The approval and any refusal are also shown to you, not only sent to the model. `sdlc off` releases the session, for a LOW change you decide to do outside the pipeline.
 - **`Evidence:` on `fix:` commits.** A `git commit` whose subject is `fix:` or `fix(scope):` and whose message has no `Evidence:` line is denied. Every commit in the command is checked, and a `-F` file is read from where the commit runs (after a `cd` or `git -C`). When it cannot read the message (piped into `-F -`, or a `-F` file the same command writes first), it checks the text that supplies it, the pipe or heredoc into `-F -` or the statement that writes the file, for a `fix:` subject and an `Evidence:` line.
 - **Read-only agents stay read-only, on a best-effort basis.** A Bash command from `tech-lead`, `security-reviewer`, `brutal-reviewer`, `analyst` or `leak-scanner` is denied when it matches a list of the common ways to write: a redirect into a file, `rm`/`mv`/`cp` and their kin, `sh -c`, in-place `sed` or `perl`, an install, `find -delete`, or a git command that changes state. It is a denylist, not a sandbox: `python3 -c` or `$(...)` gets through.
 
-The gates stop a reply that was misread, not an agent set on getting past them. They need `python3` (3.9 or later) and fail open: an error or a timeout lets the action through, and `SDLC_GATE=off` turns them off. What they do not cover: a file written through Bash in a locked session, the gate's state in `~/.claude/sdlc-gate/`, which Bash can delete, and a run resumed in a new session, which needs `approve plan` typed again. `SDLC_GATE_TRACE=1` logs what Claude Code sends each hook to `~/.claude/sdlc-gate/trace.log`.
+The gates stop a reply that was misread, not an agent set on getting past them. They need `python3` (3.9 or later) and fail open: an error or a timeout lets the action through, and `SDLC_GATE=off` turns them off. Two checks deny instead, because an error there would lift a limit that is on: the scope check, and a file path the gate cannot read while a run is locked or approved. `SDLC_GATE_SCOPE=off` turns off only the scope check. What they do not cover: a file written through Bash, in a locked session or outside the scope (the boundary for those is the host's sandbox and permission settings), an edit outside `CLAUDE_PROJECT_DIR`, as in a sibling package of a larger repo, the gate's state in `~/.claude/sdlc-gate/`, which Bash can delete, and a run resumed in a new session, which needs `approve plan` typed again. `SDLC_GATE_TRACE=1` logs what Claude Code sends each hook to `~/.claude/sdlc-gate/trace.log`.
 
 ## Install
 
@@ -105,8 +105,9 @@ Some gates call skills from other plugins: `idea-slayer` and `architecture-slaye
 
 - **At Plan,** `tech-lead` reads `~/.claude/lessons/LESSONS.md` when it exists. It applies the lessons whose cue fits the change, skipping `proposed` and `retired` ones, and verifies their facts first.
 - **At the retro,** each lesson the plan used gets a row: what it changed and what was observed. One run has no contrast, so the row is rated `confounded`. At most one new lesson is added, as `proposed`, and `tech-lead` does not apply it until you accept it.
+- **Every failure is tagged.** The retro's **Failures** table gives each distinct failure of the task a row: a tag from a fixed list, the stage that caught it, the agent, a root cause, the evidence and the resolution. `python3 -I scripts/failures.py <project folders>` counts the different tasks per tag and agent, so a failure that recurs across tasks is visible before anyone proposes a lesson for it. It counts a failure once per task, and reports a row with a tag outside the list.
 - **An A/B eval rates a lesson:** the same case run with the lesson in the builder's plan and without it. `hurt` retires the lesson, and `helped` raises its confidence to medium. A promoted lesson that is later rated `hurt` also needs its text reverted in the agent it was written into; the script says so.
-- **Agent files** never change from a run. Promoting a lesson into an agent needs `helped` from its A/B eval, and your yes.
+- **Agent files** never change from a run. Promoting a lesson into an agent needs `helped` from its A/B eval, and your yes. After the edit, a regression check runs all of that agent's eval cases against a run from before it, and an edit that made a case worse is reverted.
 
 To start a library, create the file with entries like this (an entry you write yourself can start as `library`; one the retro adds starts as `proposed`):
 
@@ -136,6 +137,21 @@ To rate a lesson:
    ```
 
    It counts the runs that passed in each arm. A gap of at least half in pass rate is `helped` or `hurt`, and a smaller gap is `no observed effect`. An errored run, a run that skipped its paid graders, an eval that stopped early, or fewer than 3 runs in an arm is `confounded`.
+
+To promote a rated lesson (after `helped` and your yes), check that the agent edit broke nothing else. The frozen suite, the baselines and the hidden holdout live with the plugin's evals (here `my-agents-plugin/evals`, `evals/baselines` and `evals-holdout`):
+
+1. **Freeze once.** `python3 -I scripts/suite.py freeze evals/suites/regression.json evals <case> ...` records a hash of every file of each case, and refuses to overwrite a manifest. `scripts/check.sh` runs `suite.py check` when `SDLC_EVALS` names the eval folder (`export SDLC_EVALS=~/claude-mods/my-agents-plugin/evals`): a case that was edited after freezing is CHANGED, and a baseline taken for another version of the agent file is `stale`.
+2. **A baseline per agent version.** Run the agent's cases (`claude plugin eval <plugin> --case '<agent>-*' --scaffold --ablation none --allow-tools Bash Write Edit --trust-plugin --json result.json`, 5 runs each), then `python3 -I scripts/suite.py baseline result.json --agent-file <the plugin's agents/<agent>.md> --out evals/baselines --manifest evals/suites/regression.json`. It keeps each run's pass, error, cost and time in `<agent>-<hash>.json`, where the hash names the agent file. A case it lists as RERUN (a timeout, a skipped paid grader, fewer than 5 runs, a frozen case missing from the results) is run alone, and its result file is added to the same command: a later result replaces that case's runs.
+3. **Edit, then run again.** Edit the agent, sync the plugin's copy, and run the same cases into `after.json`, and the hidden holdout (`--eval-dir evals-holdout`, a baseline kept in `evals-holdout/baselines`) the same way.
+4. **Record the comparison,** naming the agent file so the entry carries its hash:
+
+   ```bash
+   python3 -I scripts/rate_lesson.py after.json L1 --regression evals/baselines/<agent>-<hash>.json --agent plugins/sdlc/agents/<agent>.md
+   ```
+
+   A case that both runs hold, with at least 3 runs and no error or skipped paid grader in each, is judged, and it dropped when its pass rate fell by half or more. `ok` means none dropped. `REGRESSED` names the cases and exits 1: revert the edit, or fix it and run both again. `confounded` (nothing judged, or the eval stopped early) exits 1 too, since it shows nothing. The lesson's status and confidence do not change.
+
+`scripts/check.sh` then reports a promoted lesson whose quoted text is missing from an installed agent (a local copy that never got the edit), and a rating whose agent file has changed since.
 
 ## Versions
 
