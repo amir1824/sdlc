@@ -2,6 +2,15 @@
 
 All notable changes, newest first. Versions follow [semver](https://semver.org): a change that alters how an agent or a gate behaves is a minor version, and a wording fix is a patch.
 
+## Unreleased
+
+Gaps found by a red-team review of the process: what the plan never asked, and tests that no longer match the code.
+
+- HIGH plans carry **Must not happen** (at least three outcomes the change may never produce) and **Assumptions about the request**, both shown at the Plan gate. `qa-engineer` gives each line its own check or lists it as `not covered`; Verify does not pass a HIGH run with a line neither checked nor accepted by the owner.
+- `review.md` gets a **Test runs** table (HIGH: every run; MEDIUM: the whole-suite run at Ship): command, exit code, fingerprint of the code it ran on, time, output and the requirements it covers. The agent that ran the tests takes the fingerprint before and after; the row counts only when they are equal. At Ship, and on `/sdlc resume` after Verify, a row whose fingerprint differs from the code now is stale and runs again. This is the chair's own check, not a hook, and it shows the evidence matches the code, not that the code is right.
+- An owner who accepts a `not covered` Must-not-happen line does so in their own words, quoted in `status.md`.
+- README: the gates are described as guardrails that do not prove the requirements are right; an action that must never happen belongs in the host's permission deny rules or a sandbox.
+
 ## 0.4.0 (2026-11-05)
 
 A run can be continued after a crash, the gate holds for Bash and for its own crashes, and the eval tooling gains a frozen suite and tagged failures.

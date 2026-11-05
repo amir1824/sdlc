@@ -14,6 +14,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SDLC = REPO / "plugins" / "sdlc" / "commands" / "sdlc.md"
+TECH_LEAD = REPO / "plugins" / "sdlc" / "agents" / "tech-lead.md"
+QA_ENGINEER = REPO / "plugins" / "sdlc" / "agents" / "qa-engineer.md"
+RULES = REPO / "rules" / "sdlc.md"
 OLD_LIMIT = re.compile(r"at most (the )?one test file", re.IGNORECASE)
 FINGERPRINT = re.compile(r"### Fingerprint.*?```sh\n(.*?)\n```", re.DOTALL)
 
@@ -49,6 +52,40 @@ class WordingTest(unittest.TestCase):
 
     def test_resume_comes_before_the_empty_request_line(self):
         self.assertLess(self.text.index("## Resume"), self.text.index("If the request above is empty"))
+
+    def test_tech_lead_defines_must_not_happen_for_high_only(self):
+        self.assertIn("**Must not happen** (HIGH only)", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_qa_engineer_gives_each_must_not_happen_line_a_check_or_not_covered(self):
+        text = QA_ENGINEER.read_text(encoding="utf-8")
+        self.assertIn("each line is a criterion that needs its own check", text)
+        self.assertIn("`not covered`", text)
+
+    def test_plan_gate_shows_must_not_happen_and_assumptions_to_the_owner(self):
+        self.assertIn("**Must not happen** and **Assumptions about the request**", self.text)
+
+    def test_verify_records_each_test_run_with_a_fingerprint(self):
+        self.assertIn("under **Test runs**", self.text)
+        self.assertIn("`| id | command | exit | fingerprint | started (ISO) | output | covers |`", self.text)
+
+    def test_ship_recomputes_the_fingerprint_before_relying_on_a_run(self):
+        self.assertIn("the chair recomputes the fingerprint", self.text)
+
+    def test_ship_says_the_fingerprint_check_is_not_a_hook(self):
+        self.assertIn("This is the chair's own check, not a hook", self.text)
+
+    def test_resume_marks_test_runs_with_a_different_fingerprint_stale(self):
+        self.assertIn("mark every **Test runs** row whose fingerprint differs as stale", self.text)
+
+    def test_the_rules_name_the_must_not_happen_list_for_high_work(self):
+        self.assertIn("a must-not-happen list", RULES.read_text(encoding="utf-8"))
+
+    def test_the_rules_ask_for_run_fingerprints_in_the_high_column(self):
+        high_cell = RULES.read_text(encoding="utf-8").split("| Verify |")[1].split("\n")[0].split("|")[2]
+        self.assertIn("each run records the code it ran on", high_cell)
+
+    def test_readme_calls_the_gates_a_best_effort_guardrail(self):
+        self.assertIn("best-effort guardrail", (REPO / "README.md").read_text(encoding="utf-8"))
 
 
 class FingerprintTest(unittest.TestCase):
