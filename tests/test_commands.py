@@ -205,11 +205,9 @@ class WordingTest(unittest.TestCase):
         self.assertIn("A BLOCK fix is verified again as the Verify row says.", self.text)
         self.assertIn("only by the reviewer who raised it, on the changed lines", self.text)
 
-    def test_a_low_request_stops_before_stage_one_until_the_owner_says_run_it_anyway(self):
-        self.assertIn("stop before writing any file", self.text)
-        self.assertIn("call no agent until the owner replies `run it anyway` in this conversation (a headless call resumes the same session) or the request itself starts with those words", self.text)
-        self.assertIn("A declined LOW run leaves nothing behind", self.text)
-        self.assertIn("After it the run is recorded as `risk: LOW` and runs as MEDIUM.", self.text)
+    def test_a_low_request_is_named_and_the_owner_chooses_at_the_first_stop(self):
+        self.assertIn("When it is LOW, say so in your first reply and recommend doing it outside this pipeline; the owner chooses at the first STOP gate, and until then the pipeline runs as usual.", self.text)
+        self.assertNotIn("run it anyway", self.text)
 
     def test_a_default_that_leaves_a_sibling_unprotected_is_an_owner_decision(self):
         self.assertIn("a sibling function, a bulk or batch variant, a second module that reads the same data", self.text)
@@ -241,6 +239,10 @@ class WordingTest(unittest.TestCase):
 
     def test_verify_runs_the_commands_before_the_reviewers(self):
         self.assertIn("In Verify the commands come before the reviewers; when they fail, the run goes back to Build and no reviewer is called.", self.text)
+
+    def test_only_a_place_the_grep_names_is_an_owner_question(self):
+        self.assertIn("Only a place that grep names counts", self.text)
+        self.assertIn("a request whose grep names no such place has no Owner questions", self.text)
 
     def test_the_repo_has_no_hebrew_text(self):
         self.assertEqual(files_with_hebrew(), [])

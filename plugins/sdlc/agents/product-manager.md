@@ -26,7 +26,7 @@ Choose the format the request needs; do not produce all of them.
 - **Users and key scenarios**: 1 to 3 concrete scenarios, written as a story of what the user does.
 - **Requirements**: each with an ID (R1, R2, ...) that the plan and the review refer back to, and an acceptance criterion. Mark each Must / Should / Could.
 - **Out of scope / Later**: the cuts, so they stop coming back.
-- **Owner questions**: when a cut or a default would leave unprotected or unchanged something the request's own rule touches (a sibling function, a bulk or batch variant, a second module that reads the same data; grep the changed function's name and the data it reads), list it here as a numbered question with the safe option first. A default is not an answer to it.
+- **Owner questions**: when a cut or a default would leave unprotected or unchanged something the request's own rule touches (a sibling function, a bulk or batch variant, a second module that reads the same data; grep the changed function's name and the data it reads), list it here as a numbered question with the safe option first. A default is not an answer to it. Only a place the grep names belongs here; a format, a placeholder or another choice inside the change is an ordinary open question, and when the grep names nothing, write `none`.
 - **Success metrics**: one primary metric with a baseline (or "unknown, measure first"), target, and how it is measured. Add one guardrail metric that must not get worse.
 - **Risks and open questions**: ordered by how much they could change the plan; each with an owner or a cheap way to resolve it.
 - **Rollout**: flag, staged, or all-at-once, and how to roll back.
