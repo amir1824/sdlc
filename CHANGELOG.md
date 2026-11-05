@@ -2,6 +2,25 @@
 
 All notable changes, newest first. Versions follow [semver](https://semver.org): a change that alters how an agent or a gate behaves is a minor version, and a wording fix is a patch.
 
+## 0.4.0 (2026-11-05)
+
+The gate holds for Bash and for its own crashes. It still prevents mistakes, not attacks; the README says so.
+
+- A crash of the `tool` hook in a session that is locked or has an approved plan denies the action, with `sdlc off` as the way out. Without a lock, or with input that cannot name a session, it still fails open. The `prompt` hook never denies.
+- While a session is locked, or a plan changed after approval, a Bash command that writes is denied for every agent, not only the read-only ones. The denial says to use the Write tool for files under `.sdlc/`; a redirect into `/tmp` is allowed. A locked command over 16,000 characters is denied as too long to check.
+- A Bash command that spells `~/.claude/sdlc-gate/` (or the `SDLC_GATE_HOME` path) in a statement that writes is denied in every session. A commit message or heredoc that only quotes the folder is not a write. A relative path after `cd`, a glob or a variable is not seen.
+- The write denylist covers inline code for `python`, `node`, `nodejs`, `ruby`, `perl`, `php`, `bun` and `deno eval` (also behind `sudo`, `env`, `VAR=x`, `uv run` and in a loop body), a shell or interpreter fed a heredoc, and `awk` that prints into a file, runs `system()` or edits in place. A heredoc body is no longer read as commands, for read-only agents too, unless the head pipes it on (`cat <<EOF | sh`).
+- 49 new tests in `tests/test_sdlc_gate.py`; 33 of them fail against the 0.3.0 hook, and the rest guard what must stay allowed.
+- Known false positives while locked: read pipelines such as `npm test | tee out.log` or `git checkout -b x`. `approve plan` or `sdlc off` ends the lock.
+
+## 0.3.0 (2026-11-05)
+
+A run can be continued after a crash, and a builder is no longer limited to one test file.
+
+- `/sdlc` resume: `/sdlc resume <slug>` (or a bare `/sdlc`, which lists runs that are not `closed` or `abandoned`) continues a run from its `status.md`. The file now opens with `run:`, `risk:`, `base:` and `plan-sha:`, and each stage line is `pending|running|done|skipped|blocked|failed`. `running` is written before a stage starts, so a crash leaves a mark.
+- A fingerprint of the tracked and untracked changes (leaving out `.sdlc/`) is recorded as `built:` when Build is done. Resume compares it, and the plan's sha, and sends the run back to Verify or Plan when they differ. The gate is not changed, so `approve plan` is typed again on resume.
+- Build: the builder runs the test files it wrote or changed plus the files the project's own related-tests command selects, in one foreground process and never while another agent runs tests. The one-test-file limit is gone from `/sdlc`, `rules/sdlc.md` and the three builder agents; the whole suite still runs at Ship.
+
 ## 0.2.1 (2026-11-03)
 
 Fixes from a code review of 0.2.0. Each code fix has a test that failed before it.

@@ -6,14 +6,18 @@ exactly `approve plan` or `אשר תוכנית` unlocks them and binds the appro
 each `.sdlc/*/plan.md`; a reply of exactly `sdlc off` releases the session.
 `tool` (PreToolUse): denies an edit in the project while the session is locked or after an
 approved plan.md changed or a new one appeared, a `fix:` commit without an `Evidence:` line
-(a message it cannot read is judged on the command text), and a Bash command that writes from a
-read-only review agent.
+(a message it cannot read is judged on the command text), a Bash command that writes from a
+read-only review agent or while the session is locked, and a Bash command that writes to the gate's state.
 
-Fails open: any error exits non-zero (never 2), so Claude Code lets the action through.
+Fails open, except that a crash of the `tool` hook in a session that is locked or has an approved plan
+denies the action (`sdlc off` releases it). Any other error exits non-zero (never 2), so Claude Code
+lets the action through.
 SDLC_GATE=off disables it. SDLC_GATE_HOME (default ~/.claude) holds sdlc-gate/ and rules/.
-ponytail: the gate stops a misread reply, not an agent set on getting past it. Bash writes
-in a locked session are not gated, Bash can delete the gate's state, and a run resumed in
-a new session needs the approval typed again; an OS sandbox and a lock keyed by run lift these.
+ponytail: the gate stops a misread reply and a model's slip, not an agent set on getting past it. A Bash
+write is judged by a denylist, so a verb it does not list gets through; a command that names the gate's
+state folder and writes is denied, but a path built at run time is not seen; a run resumed in a new
+session needs the approval typed again; and input that cannot name a session fails open. An OS sandbox
+and a lock keyed by run lift these.
 One file over the 200-line limit on purpose: `python3 -I` drops this folder from sys.path,
 so a second module would need path hacking to import.
 """
@@ -48,18 +52,26 @@ GIT = (BINARY_PATH + r"git" + SPACE + r"(?:(?:-[Cc]" + SPACE + r"(?:\"[^\"\n]{0,
        + r"[^\s;&|'\"]+)|--[\w-]+(?:=" + WORD + r"+)?)" + SPACE + r")*")
 MAX_CHECKED_COMMAND = 16_000
 CASE_INSENSITIVE_FS = sys.platform in ("darwin", "win32")
-# ponytail: a denylist of the common ways to write, not a sandbox. `python3 -c`, `$(...)`, a
-# quoted verb, an interpreter fed a here-doc and any verb not listed get through; an OS
-# sandbox is the upgrade.
+LEADING_FLAGS = r"(?:-" + WORD + r"+" + SPACE + r")*"
+INLINE_CODE_END = r"(?=[\s'\";&|)=]|$)"
+PREFIX = (r"(?:(?:sudo|time|nohup|command|exec|then|do|else)" + SPACE + r")*(?:env" + SPACE + r")?"
+          + r"(?:\w+=" + WORD + r"*" + SPACE + r")*(?:(?:uv|poetry|pipenv)" + SPACE + r"run" + SPACE + r")?")
+# ponytail: a denylist of the common ways to write, not a sandbox. A quoted verb, a script file that
+# writes, a verb built at run time, a command substitution inside a commit message, a heredoc fed to
+# `ssh` or `xargs`, and any verb not listed get through; an OS sandbox is the upgrade.
 WRITE_COMMAND = re.compile(
-    COMMAND_START + r"(?:(?:sudo|time|nohup|command|exec|then|do|else)" + SPACE + r")*"
-    + r"(?:env" + SPACE + r"(?:\w+=" + WORD + r"*" + SPACE + r")*)?"
+    COMMAND_START + PREFIX
     + r"(?:xargs" + SPACE + r"(?:-" + WORD + r"+" + SPACE + r")*)?\\?" + BINARY_PATH
     + r"(?:rm|rmdir|mv|cp|tee|touch|mkdir|chmod|chown|ln|truncate|dd|eval)" + VERB_END
     + r"|" + COMMAND_START + BINARY_PATH + r"(?:ba|z)?sh" + SPACE + r"(?:-" + WORD + r"+" + SPACE + r")*-c"
     + VERB_END
     + r"|" + COMMAND_START + BINARY_PATH + r"sed" + SPACE + r"(?:" + WORD + r"+" + SPACE + r")*?(?:-i|--in-place)"
     + r"|" + COMMAND_START + BINARY_PATH + r"perl" + SPACE + r"(?:" + WORD + r"+" + SPACE + r")*?-\w*i"
+    + r"|" + COMMAND_START + PREFIX + BINARY_PATH + r"(?:python[\d.]*" + SPACE + LEADING_FLAGS + r"-\w*c"
+    + r"|(?:node|nodejs|ruby|perl|bun)" + SPACE + LEADING_FLAGS + r"(?:-\w*[eE]|--eval|-p)"
+    + r"|php" + SPACE + LEADING_FLAGS + r"-r|deno" + SPACE + r"eval)" + INLINE_CODE_END
+    + r"|" + COMMAND_START + PREFIX + BINARY_PATH
+    + r"(?:python[\d.]*|node|nodejs|ruby|perl|php|bun|(?:ba|z|da|k)?sh|fish|source|\.)(?:[ \t]+[^\s<;&|]+)*[ \t]*<<"
     + r"|" + COMMAND_START + GIT + r"(?:commit|push|pull|reset|checkout|switch|restore|rebase|merge"
     + r"|cherry-pick|clean|apply|am|add|rm|mv|init|clone|fetch|worktree|update-ref|config|gc|prune)" + VERB_END
     + r"|" + COMMAND_START + GIT + r"(?:stash(?![ \t]+(?:list|show)\b)"
@@ -71,7 +83,16 @@ WRITE_COMMAND = re.compile(
     + r"|" + COMMAND_START + r"(?:curl|wget)\b[^;&|\n]*[ \t](?:-o|-O|--output)\b"
     + r"|[ \t]-(?:delete|exec)\b"
 )
+# awk hides its program in quotes, which writes_files strips, so these two are read on the raw command.
+AWK_START = re.compile(COMMAND_START + PREFIX + BINARY_PATH + r"[gmn]?awk" + VERB_END)
+AWK_WRITE = re.compile(r"\bprintf?\b[^}\n]{0,200}>>?(?!=)|\bsystem[ \t]*\(|-i[ \t]+inplace\b")
+# Only a plain path counts as scratch: a quote, `$`, `\` or `..` in the target fails the match, so the
+# redirect is judged a write. ponytail: a symlink under /tmp is not followed.
+SCRATCH_REDIRECT = re.compile(r"(?<!\d)\d?>>?[ \t]*/(?:private/)?tmp/(?![\w./+-]*\.\.)[\w./+-]*(?=[\s;&|)]|$)")
+COMMIT_MESSAGE = re.compile(r"(?<=[ \t])(?:-[a-zA-Z]*m|--message)(?:=|[ \t]*)(?:'[^']*'|\"[^\"]*\"|[^\s;&|'\"]+)")
+STATE_FOLDER = ".claude/sdlc-gate"
 GIT_COMMIT = re.compile(COMMAND_START + r"(?:\w+=" + WORD + r"*" + SPACE + r")*" + GIT + r"commit\b")
+COMMIT_STATEMENT = re.compile(r"(?P<head>" + GIT_COMMIT.pattern + r")(?P<args>(?:[^;&|\n'\"]|'[^']*'|\"[^\"]*\")*)")
 QUOTED_OR_WORD = r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|)'\"]+)"
 MESSAGE_FILE = re.compile(r"(?:[ \t]-F|--file)(?:=|[ \t]+)" + QUOTED_OR_WORD)
 CD = re.compile(r"(?:^|[;&|\n(][ \t]*)cd" + SPACE + QUOTED_OR_WORD)
@@ -331,24 +352,93 @@ def commit_reason(command: str, cwd: str) -> str:
     return ""
 
 
-def writes_files(command: str) -> bool:
+def without_heredoc_bodies(command: str) -> str:
+    """The command with each heredoc body cut out: a body is text for the program that reads it, not a
+    command to judge. A shell or interpreter fed a heredoc is caught by its head. A body stays when the
+    head pipes it on (`cat <<EOF | sh`), and a `<<` inside quotes is no heredoc."""
+    quoted = [quote.span() for quote in QUOTED.finditer(command)]
+    kept, position = [], 0
+    for head, body_start, body_end in heredoc_spans(command):
+        if covered(quoted, head) or "|" in command[head:body_start]:
+            continue
+        kept.append(command[position:body_start])
+        position = body_end
+    return "".join(kept) + command[position:]
+
+
+def writes_files(command: str, scratch_ok: bool = False) -> bool:
+    """Whether a command may write; with scratch_ok, a redirect into /tmp does not count."""
+    command = without_heredoc_bodies(command)
     bare = re.sub(r"'[^']*'|\"[^\"]*\"", "''", command)
-    bare = re.sub(r"(?<!\d)\d?>>?\s*/dev/null|(?<!\d)\d?>&\d", "", bare)
-    return ">" in bare or bool(WRITE_COMMAND.search(bare))
+    bare = re.sub(r"(?<!\d)\d?>>?\s*/dev/(?:null|stderr|stdout)|(?<!\d)\d?>&\d", "", bare)
+    if scratch_ok:
+        bare = SCRATCH_REDIRECT.sub("", bare)
+    if ">" in bare or WRITE_COMMAND.search(bare):
+        return True
+    return bool(AWK_START.search(command) and AWK_WRITE.search(command))
+
+
+def folded(text: str) -> str:
+    return text.casefold() if CASE_INSENSITIVE_FS else text
+
+
+def spells_state(text: str) -> bool:
+    return any(folded(needle) in folded(text) for needle in (STATE_FOLDER, str(state_dir())))
+
+
+def writes_state(command: str) -> bool:
+    """Whether one statement both spells the gate's state folder and writes. A heredoc body and the
+    message of a `git commit` are text, so a commit that quotes the folder is not a write to it."""
+    visible = COMMIT_STATEMENT.sub(lambda commit: commit["head"] + COMMIT_MESSAGE.sub("-m ''", commit["args"]),
+                                   without_heredoc_bodies(command))
+    quoted = [quote.span() for quote in QUOTED.finditer(visible)]
+    statements = (visible[start:end].strip() for start, end in statement_spans(visible, [quoted]))
+    return any(spells_state(statement) and writes_files(statement) for statement in statements)
+
+
+def too_long(command: str, subject: str) -> str:
+    if len(command) <= MAX_CHECKED_COMMAND:
+        return ""
+    return (f"sdlc-gate: {subject}, and this command is too long to check ({len(command)} characters). "
+            "Split it into shorter commands.")
+
+
+def write_reason(data: dict, command: str) -> str:
+    """Why a command that writes may not run now: the gate's state is the owner's, and the lock holds
+    for Bash as it does for the file tools. A command that neither spells the state nor meets a lock is not read."""
+    names_state = spells_state(command)
+    if len(command) <= MAX_CHECKED_COMMAND and not names_state and not writes_files(command, scratch_ok=True):
+        return ""
+    lock_denial = lock_reason(data, project_root(data))
+    if not (names_state or lock_denial):
+        return ""
+    long_command = too_long(command, "the gate's state or an unapproved plan is in play")
+    if long_command:
+        return long_command
+    if names_state and writes_state(command):
+        return "sdlc-gate: the gate's state belongs to the owner; do not change it from Bash."
+    if lock_denial and writes_files(command, scratch_ok=True):
+        return (f"{lock_denial} A Bash command that writes is denied too, except a redirect into /tmp: use the "
+                "Write tool for files under .sdlc/ (it creates the folders).")
+    return ""
 
 
 def bash_reason(data: dict, command: str) -> str:
     agent = str(data.get("agent_type", "")).split(":")[-1]
-    if agent in READ_ONLY_AGENTS and len(command) > MAX_CHECKED_COMMAND:
-        return (f"sdlc-gate: {agent} is read-only, and this command is too long to check "
-                f"({len(command)} characters). Split it into shorter read-only commands.")
-    commit = commit_reason(command, str(data.get("cwd", "")))
-    if commit:
-        return commit
-    if agent in READ_ONLY_AGENTS and writes_files(command):
+    read_only = agent in READ_ONLY_AGENTS
+    if not read_only:
+        return commit_reason(command, str(data.get("cwd", ""))) or write_reason(data, command)
+    reason = too_long(command, f"{agent} is read-only") or commit_reason(command, str(data.get("cwd", "")))
+    if reason:
+        return reason
+    if writes_files(command):
         return (f"sdlc-gate: {agent} is read-only, and this command can change files or git state. "
                 "Use read-only commands (git diff, git log, grep, the scanners).")
     return ""
+
+
+def deny(reason: str) -> None:
+    emit("PreToolUse", permissionDecision="deny", permissionDecisionReason=reason)
 
 
 def on_tool(data: dict) -> None:
@@ -359,7 +449,16 @@ def on_tool(data: dict) -> None:
     elif tool == "Bash":
         reason = bash_reason(data, str(tool_input.get("command", "")))
     if reason:
-        emit("PreToolUse", permissionDecision="deny", permissionDecisionReason=reason)
+        deny(reason)
+
+
+def is_gated(data: dict) -> bool:
+    """Whether the session has a lock or an approval. Input that cannot name a session is not gated."""
+    try:
+        files = (session_file(data, "locked"), session_file(data, "approved"))
+        return any(path is not None and path.exists() for path in files)
+    except (AttributeError, OSError):  # a payload that is not a mapping, or state the hook cannot stat
+        return False
 
 
 def trace(mode: str, data: dict) -> None:
@@ -381,7 +480,13 @@ def main() -> int:
     if mode == "prompt":
         on_prompt(data)
     elif mode == "tool":
-        on_tool(data)
+        try:
+            on_tool(data)
+        except Exception as error:  # a crash must not open a gate the owner closed
+            if not is_gated(data):
+                raise
+            deny(f"sdlc-gate: the gate failed ({type(error).__name__}) while this session is locked or has an "
+                 "approved plan, so it denies this action. The owner can reply `sdlc off` to release the session.")
     else:
         raise ValueError(f"sdlc_gate.py: unknown mode {mode!r}; expected 'prompt' or 'tool'")
     return 0
