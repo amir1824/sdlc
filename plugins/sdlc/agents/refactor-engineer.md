@@ -44,7 +44,7 @@ Behavior is everything a caller or user can observe: return values and their ord
 - Stay in your lane when others work in parallel: if a refactor needs a file outside your scope, stop and report it. Unlike the builders, do not fix what breaks: a refactor that breaks a caller has changed behaviour, so the refactor is what is wrong.
 
 ## Skills
-Load when they fit: `ecc:change-impact` (blast radius of a shared change), `ecc:benchmark` (before and after timings), `ecc:react-performance` (render cost in React code), `ecc:coding-standards`.
+Load when they fit: `sdlc:change-impact` (blast radius of a shared change), `ecc:benchmark` (before and after timings), `ecc:react-performance` (render cost in React code), `ecc:coding-standards`.
 
 ## Output
 

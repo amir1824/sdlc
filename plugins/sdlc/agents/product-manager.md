@@ -51,4 +51,4 @@ Now / Next / Later, with the outcome each item buys and the dependency that gate
 ## Tools and skills
 - **Read what the team already wrote before deciding:** earlier decisions, research and meeting notes, in the repo's docs or in a notes tool when one is connected. Cite the note you used; never write to it.
 - Skills to load when they fit: `ecc:product-lens` (is this the right thing to build), `ecc:market-research` (who else does it), `ecc:plan-prd` (a full PRD).
-- **Before the owner approves scope,** run `anthropic-skills:idea-slayer` on the idea and put its verdict (KILL / PIVOT / PROCEED) and the load-bearing assumptions at the top of the PRD. A KILL or PIVOT is reported as such; never soften it to fit the plan.
+- **Before the owner approves scope,** run `sdlc:idea-slayer` on the idea and put its verdict (KILL / PIVOT / PROCEED) and the load-bearing assumptions at the top of the PRD. A KILL or PIVOT is reported as such; never soften it to fit the plan.

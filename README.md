@@ -28,7 +28,7 @@ git clone https://github.com/amir1824/sdlc.git && cd sdlc && scripts/install.sh
 <details>
 <summary>Maintaining this repo: link instead of copy</summary>
 
-`scripts/install.sh --link --agents` links the rules, agents and commands into `~/.claude`, so `git pull` updates your install. Do not combine it with the plugin install, or each agent appears twice. Plugin hooks load only with the plugin, so wire them in `~/.claude/settings.json` yourself (back it up first; `scripts/check.sh` shows `linked` once they are there):
+`scripts/install.sh --link --agents` links the rules, agents and commands into `~/.claude`, so `git pull` updates your install. Do not combine it with the plugin install, or each agent appears twice. Skills ship with the plugin install only: `--link --agents` does not link them, so the `sdlc:<name>` skills the agents name are skipped there. Plugin hooks load only with the plugin, so wire them in `~/.claude/settings.json` yourself (back it up first; `scripts/check.sh` shows `linked` once they are there):
 
 ```json
 "hooks": {
@@ -53,10 +53,11 @@ To keep your own version of a file (for example an agent with your own MCP tools
 | `plugins/sdlc/agents/` | 14 role agents: planning, building, review, security, devops, docs and research |
 | `plugins/sdlc/commands/` | `/sdlc` (the full pipeline), `/brutal-review`, `/security-audit` |
 | `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`) |
+| `plugins/sdlc/skills/` | the six skills the gates call |
 | `rules/` | 7 engineering rules for `~/.claude/rules/` |
 | `scripts/` | `install.sh`, `check.sh` (drift, hook wiring, versions), and the tools for the [lessons library](docs/lessons-library.md) |
 | `tests/` | unit tests for the hooks and the scripts |
-| `docs/` | the diagram and the lessons library guide |
+| `docs/` | the diagram, the lessons library guide and the list of optional skills |
 
 ## How it works
 
@@ -83,6 +84,7 @@ To keep your own version of a file (for example an agent with your own MCP tools
 | 9 | Learn (on the readout date) | `analyst` | `learn.md` |
 
 - The plan maps every requirement to its files and its proving check, lists every call site a change must cover, and names the trust boundaries before any code exists. For HIGH work it also lists what **must not happen** and the assumptions made about the request, so you can catch a missing requirement before code exists.
+- When a plan adds a schema or migration, changes an event name or payload or a public API signature, or adds a dependency, a service, a trust boundary or a module (or is new-product work, or HIGH work that crosses components), it carries an As-Is and a To-Be diagram (Mermaid, inside `plan.md`) and a table of the components and contracts it touches, each with a check that can run. Your `approve plan` covers the diagrams, because the plan hash does; the hash binds the file, not your reading of it, so read the rendered diagram, or the source, before you approve. A routine change gets one line saying why there is no diagram. A diagram shows the proposed design, not that it is right, and this is a prompt the model follows, not a check.
 - A builder fixes what its change breaks and lists each such file in `build.md`.
 - For HIGH work every test run is recorded in `review.md` with a fingerprint of the code it ran on. At Ship, a run whose code changed since is stale and runs again.
 - A run survives a closed session: `/sdlc resume <slug>` continues from `status.md`. You type `approve plan` again, because the gate never counts an earlier approval.
@@ -98,9 +100,11 @@ These gates are a best-effort guardrail. They stop a misread reply and a model's
 
 If the gate itself crashes in a locked or approved session, it denies the action (reply `sdlc off` to release). In any other session an error lets the action through. While locked, some read pipelines such as `npm test | tee out.log` are denied too; `approve plan` or `sdlc off` ends that. The gates need `python3` 3.9 or later. `SDLC_GATE=off` turns them off, `SDLC_GATE_SCOPE=off` turns off only the scope check, and `SDLC_GATE_TRACE=1` logs what Claude Code sends each hook to `~/.claude/sdlc-gate/trace.log`.
 
-## Optional skills
+## Skills
 
-Some gates call skills from other plugins: `idea-slayer` and `architecture-slayer` (Anthropic), and `change-impact`, `browser-qa`, `click-path-audit` and `canary-watch` (ECC). When one is not installed, the stage says "not run" at the top of its file instead of inventing a verdict.
+Six skills that the gates call ship inside the plugin, so they work right after install: `architecture-slayer`, `idea-slayer`, `change-impact`, `canary-watch`, `browser-qa` and `click-path-audit`. The agents load them as `sdlc:<name>`; four came from the [ECC plugin](https://github.com/affaan-m/ECC), and `plugins/sdlc/skills/THIRD_PARTY_NOTICES.md` has the credits and license. If you also have ECC installed, its copies are the same skills under `ecc:<name>`.
+
+The agents also list optional skills to load when they fit, mostly from ECC. They are not bundled; [docs/skills.md](docs/skills.md) lists each one and who uses it. A skill that is not installed is skipped, and a gate that cannot run says "not run" at the top of its file instead of inventing a verdict.
 
 ## The lessons library (optional)
 

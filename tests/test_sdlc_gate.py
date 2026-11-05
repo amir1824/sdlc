@@ -87,10 +87,10 @@ class PromptTest(GateTest):
         self.assertIn('prompt="approve plan"', (self.home / "sdlc-gate" / "approvals.log").read_text())
         self.assertIn(".sdlc/feature/plan.md", self.context(done))
 
-    def test_hebrew_approval_unlocks(self):
+    def test_the_former_hebrew_approval_phrase_no_longer_unlocks(self):
         self.prompt("/sdlc add a slug helper")
-        self.prompt("אשר תוכנית")
-        self.assertFalse(self.lock.exists())
+        self.prompt("\u05d0\u05e9\u05e8 \u05ea\u05d5\u05db\u05e0\u05d9\u05ea")
+        self.assertTrue(self.lock.is_file())
 
     def test_approval_with_a_full_stop_unlocks(self):
         self.prompt("/sdlc add a slug helper")
@@ -99,7 +99,7 @@ class PromptTest(GateTest):
 
     def test_interpreted_go_ahead_does_not_unlock(self):
         self.prompt("/sdlc add a slug helper")
-        done = self.prompt("תן בראש על המשימה")
+        done = self.prompt("looks good, go for it")
         self.assertTrue(self.lock.is_file())
         self.assertEqual(done.stdout, "")
 
@@ -827,13 +827,6 @@ class ScopeTest(GateTest):
         self.prompt("approve plan feature")
         (self.project / ".sdlc" / "older" / "plan.md").write_text("# rewritten\n")
         self.assertIn(".sdlc/older/plan.md changed", self.reason(self.edit(self.project / "src" / "a.py")))
-
-    def test_a_hebrew_approval_accepts_a_name(self):
-        self.scoped("src/**")
-        self.second_plan("older", "docs/**")
-        self.prompt("/sdlc add a slug helper")
-        self.prompt("אשר תוכנית feature")
-        self.assertFalse(self.lock.exists())
 
     def test_a_name_is_accepted_when_one_plan_exists(self):
         self.prompt("/sdlc add a slug helper")

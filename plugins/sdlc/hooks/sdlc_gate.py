@@ -2,7 +2,7 @@
 """The sdlc gate hooks for Claude Code: one script, two hook events.
 
 `prompt` (UserPromptSubmit): a typed `/sdlc` locks code edits in that session; a reply of
-exactly `approve plan` or `אשר תוכנית` unlocks them and binds the approval to the hash of
+exactly `approve plan` unlocks them and binds the approval to the hash of
 each `.sdlc/*/plan.md`; with more than one plan.md the reply names the plan, `approve plan
 <folder>`. When that plan holds an `sdlc-scope` block, its patterns are frozen into the approval
 and only matching files may be edited. A reply of exactly `sdlc off` releases the session.
@@ -41,7 +41,7 @@ from pathlib import Path
 
 SDLC_PROMPT = re.compile(r"/(?:[\w-]+:)?sdlc(?:\s|$)")
 APPROVE_PROMPT = re.compile(
-    r"(?:approve plan|אשר תוכנית)(?:[ \t]+(?P<slug>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?))?[\s.!]*",
+    r"approve plan(?:[ \t]+(?P<slug>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?))?[\s.!]*",
     re.IGNORECASE)
 RELEASE_PROMPT = re.compile(r"/?sdlc off[\s.!]*", re.IGNORECASE)
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -122,8 +122,8 @@ MAX_COMMITS = 50
 EVIDENCE_REASON = ("sdlc-gate: a fix: commit needs an `Evidence:` line in its body: a log line quoted with its "
                    "file and line, or the name of a check that failed before the change. "
                    "Write only evidence you observed.")
-UNLOCK_WORDS = ("exactly `approve plan` (or `אשר תוכנית`; with more than one plan.md, add the plan's folder "
-                "name after it), or `sdlc off` to leave the pipeline")
+UNLOCK_WORDS = ("exactly `approve plan` (with more than one plan.md, add the plan's folder name after it), "
+                "or `sdlc off` to leave the pipeline")
 SCOPE_FENCE = "```sdlc-scope"
 SCOPE_MAX_ENTRIES, SCOPE_MAX_ENTRY, SCOPE_MAX_BYTES, SCOPE_MAX_PARTS = 100, 200, 8192, 100
 SCOPE_TAG = "sdlc-gate: [scope] "

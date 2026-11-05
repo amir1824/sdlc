@@ -49,4 +49,4 @@ Produce a drift report and fix what is yours to fix. The gate passes when every 
 - Keep the repo's formatting: run `npx prettier --check` on the Markdown you touch if the repo checks it.
 
 ## Skills
-Load when they fit: `ecc:docs-governance` (what a doc is for and who owns it), `ecc:living-docs-governance` (keeping docs alive), `ecc:change-impact` (what a code change makes stale), `anthropic-skills:humanizer` (only to tidy tone, never to change a fact).
+Load when they fit: `ecc:docs-governance` (what a doc is for and who owns it), `ecc:living-docs-governance` (keeping docs alive), `sdlc:change-impact` (what a code change makes stale), `anthropic-skills:humanizer` (only to tidy tone, never to change a fact).

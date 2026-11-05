@@ -17,8 +17,16 @@ SDLC = REPO / "plugins" / "sdlc" / "commands" / "sdlc.md"
 TECH_LEAD = REPO / "plugins" / "sdlc" / "agents" / "tech-lead.md"
 QA_ENGINEER = REPO / "plugins" / "sdlc" / "agents" / "qa-engineer.md"
 RULES = REPO / "rules" / "sdlc.md"
+CHANGELOG = REPO / "CHANGELOG.md"
+TRIGGERS = ("adds a schema or migration, changes an event name or payload or a public API signature, "
+            "or adds a dependency, a service, a trust boundary or a module")
 OLD_LIMIT = re.compile(r"at most (the )?one test file", re.IGNORECASE)
 FINGERPRINT = re.compile(r"### Fingerprint.*?```sh\n(.*?)\n```", re.DOTALL)
+
+
+def files_with_hebrew():
+    paths = [p for p in REPO.rglob("*") if p.is_file() and p.suffix in (".md", ".py", ".json", ".sh", ".drawio") and ".git" not in p.parts]
+    return [str(p.relative_to(REPO)) for p in sorted(paths) if re.search(r"[\u0590-\u05FF]", p.read_text(encoding="utf-8"))]
 
 
 def files_with_old_limit():
@@ -83,6 +91,88 @@ class WordingTest(unittest.TestCase):
     def test_the_rules_ask_for_run_fingerprints_in_the_high_column(self):
         high_cell = RULES.read_text(encoding="utf-8").split("| Verify |")[1].split("\n")[0].split("|")[2]
         self.assertIn("each run records the code it ran on", high_cell)
+
+    def test_tech_lead_defines_the_architecture_section_with_its_triggers(self):
+        text = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("- **Architecture**: required when the plan " + TRIGGERS, text)
+
+    def test_tech_lead_asks_for_both_diagrams_a_contract_table_and_a_skip_line(self):
+        text = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("**As-Is**: a fenced `mermaid` block", text)
+        self.assertIn("**To-Be**: a fenced `mermaid` block", text)
+        self.assertIn("`| Component / contract | Expected change | Verification |`", text)
+        self.assertIn("`Architecture diagram: skipped — <specific reason>`", text)
+
+    def test_tech_lead_labels_what_it_could_not_confirm_as_unknown(self):
+        text = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("Name the file you read for each node", text)
+        self.assertIn("labelled `unknown`, never drawn as fact", text)
+
+    def test_tech_lead_requires_the_section_for_new_products_and_high_plans_across_components(self):
+        text = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("every new-product plan and every HIGH plan that crosses more than one component", text)
+
+    def test_tech_lead_puts_the_rejected_alternative_in_the_approach(self):
+        self.assertIn("the main alternative you rejected and the tradeoff", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_tech_lead_asks_for_failure_scenarios_in_the_architecture_section(self):
+        self.assertIn("**Failure scenarios**: for each dependency the change adds or touches", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_the_trigger_list_is_worded_the_same_in_the_agent_the_rules_and_the_readme(self):
+        self.assertIn(TRIGGERS, TECH_LEAD.read_text(encoding="utf-8"))
+        self.assertIn(TRIGGERS, RULES.read_text(encoding="utf-8"))
+        self.assertIn(TRIGGERS, (REPO / "README.md").read_text(encoding="utf-8"))
+        self.assertIn(TRIGGERS, CHANGELOG.read_text(encoding="utf-8"))
+
+    def test_tech_lead_defines_the_trigger_terms(self):
+        text = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("module is a new top-level folder or package", text)
+        self.assertIn("new-product is a plan whose PRD starts a new product", text)
+        self.assertIn("component is a top-level folder, package or deployable unit", text)
+
+    def test_plan_gate_bounds_the_trust_boundary_rounds_and_the_chair_does_not_redraw(self):
+        self.assertIn("The chair does not redraw.", self.text)
+        self.assertIn("After two rounds, what still disagrees goes to the owner at the STOP.", self.text)
+
+    def test_plan_gate_checks_the_scope_patterns_against_a_short_list(self):
+        self.assertIn("The chair also checks the `sdlc-scope` patterns against a short list", self.text)
+        self.assertIn("A match sends the plan back to `tech-lead` once", self.text)
+        self.assertIn("The list is a floor, not a ceiling", self.text)
+        self.assertIn("the chair also counts the top-level folders in `sdlc-scope`", self.text)
+
+    def test_plan_row_points_at_the_architecture_subsection_and_names_the_failure_scenarios(self):
+        self.assertIn("handled as described under \"Architecture in the plan\" below", self.text)
+        self.assertIn("the component and contract table and the failure scenarios", self.text)
+
+    def test_plan_gate_treats_a_change_after_approval_as_an_amendment(self):
+        self.assertIn("any change to `plan.md` is an amendment that needs `approve plan` again", self.text)
+
+    def test_plan_gate_keeps_the_diagrams_inside_the_hashed_plan(self):
+        self.assertIn("in fenced `mermaid` blocks inside `plan.md`, so the plan hash covers them", self.text)
+
+    def test_plan_gate_does_not_let_a_skip_line_satisfy_a_trigger(self):
+        self.assertIn("a skip line does not satisfy a trigger", self.text)
+
+    def test_plan_gate_renders_the_diagrams_for_the_owner(self):
+        self.assertIn("renders the diagrams with a Mermaid-capable diagram tool", self.text)
+
+    def test_the_rules_ask_for_diagrams_only_when_a_contract_changes(self):
+        self.assertIn("otherwise the skip reason in one line", RULES.read_text(encoding="utf-8"))
+
+    def test_the_rules_let_a_high_change_inside_one_component_skip_the_diagrams(self):
+        self.assertIn("unless no trigger above applies and the whole change sits inside one existing component", RULES.read_text(encoding="utf-8"))
+
+    def test_readme_says_the_hash_binds_the_file_not_the_owners_reading(self):
+        self.assertIn("the hash binds the file, not your reading of it", (REPO / "README.md").read_text(encoding="utf-8"))
+
+    def test_readme_says_a_diagram_does_not_prove_the_design(self):
+        self.assertIn("not that it is right, and this is a prompt the model follows", (REPO / "README.md").read_text(encoding="utf-8"))
+
+    def test_plan_gate_answers_a_yes_in_another_language_by_asking_for_the_words(self):
+        self.assertIn("a clear yes in another language gets the same answer", self.text)
+
+    def test_the_repo_has_no_hebrew_text(self):
+        self.assertEqual(files_with_hebrew(), [])
 
     def test_readme_calls_the_gates_a_best_effort_guardrail(self):
         self.assertIn("best-effort guardrail", (REPO / "README.md").read_text(encoding="utf-8"))
