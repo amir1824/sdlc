@@ -46,6 +46,10 @@ To keep your own version of a file (for example an agent with your own MCP tools
 
 </details>
 
+## When to use `/sdlc`
+
+`/sdlc` is for a feature that starts from an idea and spans several files. A small change follows `rules/sdlc.md` without it: LOW is done and checked, MEDIUM gets a short plan and an independent review, and HIGH gets a design review and your yes before the first edit. In `claude -p` each STOP ends the call, so answer each gate in its own call that resumes the same session (`--resume`), with `approve plan` alone and after any question the chair asked in words, and allow the commands the stages run (`git`, `shasum`, `xargs`, `cp`, `mktemp`, `python`, the project's test runner), or Verify and Ship stop.
+
 ## What is inside
 
 | Path | What |

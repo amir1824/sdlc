@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parent.parent
 SDLC = REPO / "plugins" / "sdlc" / "commands" / "sdlc.md"
 TECH_LEAD = REPO / "plugins" / "sdlc" / "agents" / "tech-lead.md"
 QA_ENGINEER = REPO / "plugins" / "sdlc" / "agents" / "qa-engineer.md"
+SECURITY_REVIEWER = REPO / "plugins" / "sdlc" / "agents" / "security-reviewer.md"
 RULES = REPO / "rules" / "sdlc.md"
 CHANGELOG = REPO / "CHANGELOG.md"
 TRIGGERS = ("adds a schema or migration, changes an event name or payload or a public API signature, "
@@ -37,6 +38,7 @@ def files_with_old_limit():
 class WordingTest(unittest.TestCase):
     def setUp(self):
         self.text = SDLC.read_text(encoding="utf-8")
+        self.tech_lead = TECH_LEAD.read_text(encoding="utf-8")
 
     def test_no_one_test_file_limit_remains(self):
         self.assertEqual(files_with_old_limit(), [])
@@ -170,6 +172,75 @@ class WordingTest(unittest.TestCase):
 
     def test_plan_gate_answers_a_yes_in_another_language_by_asking_for_the_words(self):
         self.assertIn("a clear yes in another language gets the same answer", self.text)
+
+    def test_the_plan_stage_has_two_send_backs_and_tags_each_missing_defence(self):
+        self.assertIn("at most two send-backs to `tech-lead`", self.text)
+        self.assertIn("`[blocking]`", self.text)
+        self.assertIn("`[blocking]`", SECURITY_REVIEWER.read_text(encoding="utf-8"))
+        self.assertIn("`[blocking]`", self.tech_lead)
+
+    def test_a_blocking_item_reaches_the_owner_in_words_and_is_never_an_open_finding(self):
+        self.assertIn("who accepts it in their own words, quoted in `status.md` and passed into the Verify brief", self.text)
+        self.assertIn("A `[blocking]` item is never an Open finding.", self.text)
+
+    def test_note_items_are_built_only_for_a_named_line(self):
+        self.assertIn("are built only when they answer a line of **Must not happen** or a requirement", self.text)
+        self.assertIn("under **Open findings**", self.text)
+
+    def test_the_summary_says_what_security_reviewer_read_and_missing_sections_reach_the_owner(self):
+        self.assertIn("says whether `security-reviewer` read the whole final `plan.md`", self.text)
+        self.assertIn("A required section still missing after the second send-back", self.text)
+
+    def test_the_third_return_from_verify_to_build_stops_for_the_owner(self):
+        self.assertIn("After the third return from Verify to Build, stop and tell the owner", self.text)
+
+    def test_hardening_follows_the_tags_or_a_named_line(self):
+        self.assertIn("Add a hardening step when `security-reviewer` tags it `[blocking]` or it answers a line of **Must not happen** or a requirement", self.tech_lead)
+
+    def test_plan_is_sized_to_the_change_and_a_required_section_is_never_cut(self):
+        self.assertIn("a section the risk class requires is never cut to fit", self.text)
+        self.assertIn("a section the risk class requires is never cut to fit", self.tech_lead)
+
+    def test_a_block_fix_is_verified_again_and_other_fixes_go_to_the_reviewer_who_raised_them(self):
+        self.assertIn("A BLOCK fix is verified again as the Verify row says.", self.text)
+        self.assertIn("only by the reviewer who raised it, on the changed lines", self.text)
+
+    def test_a_low_request_stops_before_stage_one_until_the_owner_says_run_it_anyway(self):
+        self.assertIn("stop before writing any file", self.text)
+        self.assertIn("call no agent until the owner replies `run it anyway` in this conversation (a headless call resumes the same session) or the request itself starts with those words", self.text)
+        self.assertIn("A declined LOW run leaves nothing behind", self.text)
+        self.assertIn("After it the run is recorded as `risk: LOW` and runs as MEDIUM.", self.text)
+
+    def test_a_default_that_leaves_a_sibling_unprotected_is_an_owner_decision(self):
+        self.assertIn("a sibling function, a bulk or batch variant, a second module that reads the same data", self.text)
+        self.assertIn("a reply that accepts the defaults does not answer it", self.text)
+        self.assertIn("**Owner questions** in `prd.md`", self.text)
+        self.assertIn("the chair asks it at the Define STOP", self.text)
+        self.assertIn("where `approve plan` is requested only after the answer", self.text)
+
+    def test_tests_are_proportionate_and_over_build_goes_to_the_owner(self):
+        self.assertIn("each requirement, **Must not happen** line, Instances place and named failure path has one", self.text)
+        self.assertIn("is fixed or kept with the reason, as the Verify row says", self.text)
+        self.assertIn("a line that backs a **Must not happen** is never removed without the owner's words", self.text)
+
+    def test_status_lines_are_rewritten_in_place(self):
+        self.assertIn("A stage's line is rewritten in place when it changes, keeping the reason of a `failed` or `blocked` state", self.text)
+
+    def test_a_denied_command_is_reported_and_not_wrapped(self):
+        self.assertIn("A denied command is reported as denied, with the command, and the check is `not run`. Do not run it again through a wrapper or another interpreter.", self.text)
+
+    def test_readme_says_when_to_use_sdlc_and_what_claude_p_needs(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn("`/sdlc` is for a feature that starts from an idea and spans several files.", readme)
+        self.assertIn("In `claude -p` each STOP ends the call", readme)
+
+    def test_product_manager_lists_owner_questions_for_cuts_that_leave_a_sibling_unprotected(self):
+        text = (REPO / "plugins" / "sdlc" / "agents" / "product-manager.md").read_text(encoding="utf-8")
+        self.assertIn("**Owner questions**", text)
+        self.assertIn("A default is not an answer to it.", text)
+
+    def test_verify_runs_the_commands_before_the_reviewers(self):
+        self.assertIn("In Verify the commands come before the reviewers; when they fail, the run goes back to Build and no reviewer is called.", self.text)
 
     def test_the_repo_has_no_hebrew_text(self):
         self.assertEqual(files_with_hebrew(), [])
