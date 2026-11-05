@@ -244,6 +244,51 @@ class WordingTest(unittest.TestCase):
         self.assertIn("Only a place that grep names counts", self.text)
         self.assertIn("a request whose grep names no such place has no Owner questions", self.text)
 
+    def lean_section(self):
+        return self.text[self.text.index("## Lean path"):self.text.index("## Architecture in the plan")]
+
+    def test_the_lean_path_keeps_the_plan_gate_and_the_review_and_skips_the_idea_stages(self):
+        lean = self.lean_section()
+        self.assertIn("`skipped - lean path`", lean)
+        for skipped in ("intent.md", "prd.md", "metrics.md", "launch.md", "learn.md"):
+            self.assertIn(skipped, lean)
+        self.assertIn("Stage 4 (Plan) is as in its row, `security-reviewer` included", lean)
+        self.assertIn("Stages 5 (Build) and 6 (Verify) are as in their rows", lean)
+        self.assertIn("runs the whole suite once at the end of Verify", lean)
+        self.assertIn("the hook, the independent review", lean)
+
+    def test_the_lean_path_keeps_the_high_work_the_full_path_does(self):
+        lean = self.lean_section()
+        self.assertIn("for HIGH it runs as its row says", lean)
+        self.assertIn("with the HIGH additions from Rules", lean)
+        self.assertIn("and for HIGH work that touches authentication or authorization, a schema or migration, a public contract or infrastructure", self.text)
+
+    def test_the_lean_path_names_what_each_stage_reads_and_how_it_ends(self):
+        lean = self.lean_section()
+        self.assertIn("Plan reads the request, the code and the lessons file; Build reads `plan.md`; Verify reads the diff, `plan.md` and `build.md`", lean)
+        self.assertIn("numbered R1, R2", lean)
+        self.assertIn("`approve plan` is requested only after each has a quoted answer", lean)
+        self.assertIn("Skipped stages are not re-run on resume", lean)
+        self.assertIn("`retro.md` is still written", lean)
+
+    def test_the_path_is_chosen_in_the_first_reply_recorded_and_kept_on_resume(self):
+        self.assertIn("write `path: full|lean` in the `status.md` header", self.text)
+        self.assertIn("A request that starts with the word `lean` or `full`, followed by a space, is the owner's choice and stands.", self.text)
+        self.assertRegex(self.text, r"`risk: .*`path: <full\|lean>`, `base: ")
+        self.assertIn("Keep the run's `path:`", self.text)
+        self.assertIn("lean <a change to existing code>", self.text.split("---")[1])
+
+    def test_a_bare_yes_does_not_answer_an_owner_question_and_the_defaults_phrase_does_not_either(self):
+        self.assertIn("A bare `yes` or `approve plan` with an Owner question open is answered by listing the open questions", self.text)
+        self.assertIn("`use your recommended defaults` accepts only the ordinary defaults", self.text)
+        self.assertIn("a reply that accepts the defaults does not answer it", self.text)
+        self.assertNotIn("which accepts the default listed for every open question", self.text)
+
+    def test_readme_names_the_lean_path_and_the_namespaced_command_for_claude_p(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn("`/sdlc lean <change>` is the short path", readme)
+        self.assertIn("In `claude -p` call `/sdlc:sdlc`", readme)
+
     def test_the_repo_has_no_hebrew_text(self):
         self.assertEqual(files_with_hebrew(), [])
 
