@@ -10,6 +10,7 @@ Gaps found by a red-team review of the process: what the plan never asked, and t
 - `review.md` gets a **Test runs** table (HIGH: every run; MEDIUM: the whole-suite run at Ship): command, exit code, fingerprint of the code it ran on, time, output and the requirements it covers. The agent that ran the tests takes the fingerprint before and after; the row counts only when they are equal. At Ship, and on `/sdlc resume` after Verify, a row whose fingerprint differs from the code now is stale and runs again. This is the chair's own check, not a hook, and it shows the evidence matches the code, not that the code is right.
 - An owner who accepts a `not covered` Must-not-happen line does so in their own words, quoted in `status.md`.
 - README: the gates are described as guardrails that do not prove the requirements are right; an action that must never happen belongs in the host's permission deny rules or a sandbox.
+- Docs: the README is shorter and simpler (172 to 115 lines). The lessons library guide moved to `docs/lessons-library.md`, unchanged. The architecture diagram is redrawn in English and matches 0.4.0 (it showed 0.2.1 and Hebrew labels).
 
 ## 0.4.0 (2026-11-05)
 
