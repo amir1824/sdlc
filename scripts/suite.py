@@ -5,13 +5,14 @@ Usage:
   python3 -I scripts/suite.py freeze   <manifest.json> <evals dir> <case> [<case> ...]
   python3 -I scripts/suite.py check    <manifest.json> <evals dir> [--baselines <dir> --agents-dir <dir>]
   python3 -I scripts/suite.py baseline <result.json> [<result.json> ...] --agent-file <file> --out <dir>
-                                       [--runs 5] [--manifest <manifest.json>]
+                                       [--runs 5] [--manifest <manifest.json>] [--config <path> ...]
 
 freeze records the sha256 of every file under each named case folder (prompt, case.yaml,
 scaffold, graders); a symlink or a file that is not a plain file inside a case is refused. It
 never overwrites a manifest: a frozen suite changes by a new manifest.
 check exits 1 when a case folder differs from its hash (CHANGED) or is gone (MISSING). With
---baselines it also says `stale` when no baseline was taken for the agent file as it is now.
+--baselines it also says `stale`, and exits 1, when no baseline was taken for the agent file as it is now,
+or when a file under the baseline's `--config` paths changed, vanished or appeared since it was taken.
 baseline turns `claude plugin eval --json` results into `<out>/<agent>-<hash>.json`: the agent is
 the agent file's name without `.md`, and the hash is the first 10 hex characters of the file's
 sha256 (the one `rate_lesson.py --agent` records). It keeps the pass, error, cost and time of each run of the agent's cases
@@ -36,6 +37,7 @@ AGENT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 PLAIN_TEXT = re.compile(r"[^;\x00-\x1f\x7f]*")
 BASELINE_FILE = re.compile(r"(?P<agent>[a-z0-9][a-z0-9-]*)-(?P<hash>[0-9a-f]{10})\.json")
 IGNORED_FILES = {".DS_Store"}
+IGNORED_DIRS = {"__pycache__", ".git", "node_modules"}
 MIN_RUNS = 3  # what rate_lesson.py --regression needs in a case to judge it
 
 
@@ -66,6 +68,43 @@ def case_hash(folder):
             raise ValueError(f"{path} is not a plain file; a frozen case holds plain files")
         digest.update(path.relative_to(folder).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
     return digest.hexdigest()
+
+
+def config_snapshot(roots):
+    """{path: short hash} of every file under the given files and folders: what the agent runs with besides
+    its own file (the /sdlc command, rules, hooks, skills). Paths are kept as given, not resolved, so a
+    symlink pointed at another folder shows as changed files; symlinks are followed to hash the target.
+    Only regular files count (a pipe would block the read)."""
+    snapshot = {}
+    for given in roots:
+        root = Path(os.path.abspath(given))
+        if root.is_file():
+            files = [root]
+        elif root.is_dir():
+            files = []
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+                dirnames[:] = [name for name in dirnames if name not in IGNORED_DIRS]
+                files.extend(Path(dirpath, name) for name in filenames if name not in IGNORED_FILES)
+        else:
+            raise ValueError(f"{given} is not a file or a folder")
+        snapshot.update({str(path): fingerprint(path) for path in files if path.is_file()})
+    return snapshot
+
+
+def config_drift(baseline_file):
+    """What differs between the config a baseline was taken with and the config now ('' when nothing)."""
+    config = read_json(baseline_file).get("config")
+    if not isinstance(config, dict):
+        return ""
+    try:
+        now = config_snapshot(config.get("roots", []))
+    except ValueError as err:
+        return f"config root gone: {err}"
+    then = config.get("files", {})
+    changes = [f"{path} changed" for path in sorted(then) if path in now and now[path] != then[path]]
+    changes += [f"{path} gone" for path in sorted(then) if path not in now]
+    changes += [f"{path} added" for path in sorted(now) if path not in then]
+    return "config " + "; ".join(changes) if changes else ""
 
 
 def read_json(path):
@@ -103,6 +142,8 @@ def freeze(args):
 
 
 def stale_baselines(baselines, agents_dir):
+    """Report each agent whose baseline is for an older file; return how many."""
+    stale = 0
     hashes = {}
     for path in sorted(Path(baselines).glob("*.json")):
         match = BASELINE_FILE.fullmatch(path.name)
@@ -114,6 +155,11 @@ def stale_baselines(baselines, agents_dir):
             report("missing", f"{agent}: no agent file in {agents_dir}")
         elif fingerprint(agent_file) not in taken:
             report("stale", f"{agent}: no baseline for the file now ({fingerprint(agent_file)})")
+            stale += 1
+        elif drift := config_drift(Path(baselines) / f"{agent}-{fingerprint(agent_file)}.json"):
+            report("stale", f"{agent}: {drift}")
+            stale += 1
+    return stale
 
 
 def check(args):
@@ -130,7 +176,7 @@ def check(args):
         else:
             report("ok", name)
     if args.baselines:
-        stale_baselines(args.baselines, args.agents_dir)
+        problems += stale_baselines(args.baselines, args.agents_dir)
     print(f"suite: {len(cases)} cases, {problems} problem(s)")
     sys.exit(1 if problems else 0)
 
@@ -198,6 +244,9 @@ def baseline(args):
     cases = [{"name": name, "arms": {"with": merged[name]}} for name in sorted(merged)]
     data = {"agent": agent, "agentHash": agent_hash, "startedAt": started, "claudeVersion": version,
             "partial": False, "cases": cases}
+    if args.config:
+        data["config"] = {"roots": [os.path.abspath(root) for root in args.config],
+                          "files": config_snapshot(args.config)}
     target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {target}")
     reruns = 0
@@ -236,6 +285,8 @@ def main():
     baseline_parser.add_argument("results", nargs="+")
     baseline_parser.add_argument("--agent-file", required=True)
     baseline_parser.add_argument("--manifest", help="a frozen suite: its cases of the agent must all be in the results")
+    baseline_parser.add_argument("--config", action="append", default=[], metavar="PATH",
+                                 help="a file or folder the agent runs with (commands, rules, hooks, skills); repeatable")
     baseline_parser.add_argument("--out", required=True)
     baseline_parser.add_argument("--runs", type=int, default=5)
     baseline_parser.set_defaults(run=baseline)

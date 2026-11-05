@@ -38,6 +38,10 @@ def run(passed, error=None, skipped=False):
     return {"passed": passed, "error": error, "skippedPaidGraders": skipped}
 
 
+def priced(passed, cost):
+    return {**run(passed), "costUsd": cost}
+
+
 def case(name, runs):
     return {"name": name, "arms": {"with": runs}}
 
@@ -380,11 +384,114 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("confounded (no case judged)", self.used())
 
-    def test_a_case_with_fewer_than_three_runs_is_unjudged(self):
+    def test_a_case_with_fewer_than_three_runs_is_unjudged_and_confounds_the_verdict(self):
         before = self.write("before.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 2)])
         after = self.write("after.json", [case("case-a", [run(True)] * 3), case("case-b", [run(False)] * 2)])
+        self.assertEqual(self.regress(before, after).returncode, 1)
+        self.assertIn("confounded (1 judged, but 1 unjudged: case-b)", self.used())
+
+    def test_cost_is_not_looked_at_without_max_cost_ratio(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, 50)] * 3)
         self.assertEqual(self.regress(before, after).returncode, 0)
-        self.assertIn("(1 judged, 1 unjudged, none dropped)", self.used())
+        self.assertNotIn("cost", self.used())
+
+    def test_a_cost_per_pass_within_the_ratio_is_ok(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, 1.5)] * 3)
+        out = self.regress(before, after, "L1", "--max-cost-ratio", "2")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ok (1 judged, none dropped, cost per pass $1.00 -> $1.50)", self.used())
+
+    def test_a_cost_per_pass_over_the_ratio_is_costly_and_exits_one(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, 3)] * 3)
+        out = self.regress(before, after, "L1", "--max-cost-ratio", "2")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("COSTLY (1 judged, none dropped, cost per pass $1.00 -> $3.00, over 2.0x)", self.used())
+
+    def test_failed_runs_count_towards_the_cost_of_an_accepted_task(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, 1), priced(True, 1), priced(False, 1)])
+        out = self.regress(before, after, "L1", "--max-cost-ratio", "1.2")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("cost per pass $1.00 -> $1.50", self.used())
+
+    def test_a_run_without_cost_is_confounded_when_the_gate_is_on(self):
+        before, after = self.pair([priced(True, 1)] * 3, [run(True)] * 3)
+        out = self.regress(before, after, "L1", "--max-cost-ratio", "2")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("confounded (1 judged, none dropped, a run has no costUsd)", self.used())
+
+    def test_a_baseline_with_no_passing_run_cannot_be_priced(self):
+        before, after = self.pair([priced(False, 1)] * 3, [priced(True, 1)] * 3)
+        self.assertIn("the baseline has no passing run to price", self.regress(before, after, "L1", "--max-cost-ratio", "2").stdout)
+
+    def test_a_regression_is_reported_before_a_cost_overrun(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(False, 9)] * 3)
+        self.assertIn("REGRESSED", self.regress(before, after, "L1", "--max-cost-ratio", "2").stdout)
+
+    def test_max_cost_ratio_needs_regression_and_a_positive_number(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, 1)] * 3)
+        no_regression = subprocess.run([sys.executable, "-I", str(SCRIPT), str(after), "L1", "--max-cost-ratio", "2",
+                                        "--lessons", str(self.lessons)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(no_regression.returncode, 2)
+        self.assertEqual(self.regress(before, after, "L1", "--max-cost-ratio", "0").returncode, 2)
+
+    def test_a_drop_stays_regressed_when_another_case_is_unjudged(self):
+        before = self.write("before.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 2)])
+        after = self.write("after.json", [case("case-a", [run(False)] * 3), case("case-b", [run(True)] * 2)])
+        self.assertIn("REGRESSED (case-a 3/3 -> 0/3)", self.regress(before, after).stdout)
+
+    def test_a_drop_of_two_in_five_is_ok_for_an_ordinary_case(self):
+        before, after = self.pair([run(True)] * 5, [run(True)] * 3 + [run(False)] * 2)
+        self.assertEqual(self.regress(before, after).returncode, 0)
+
+    def test_a_drop_of_two_in_five_is_regressed_for_a_hard_gate_case(self):
+        before, after = self.pair([run(True)] * 5, [run(True)] * 3 + [run(False)] * 2)
+        out = self.regress(before, after, "L1", "--hard-gate", "case-a")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("REGRESSED (case-a 5/5 -> 3/5)", self.used())
+
+    def test_a_hard_gate_case_that_did_not_fall_is_ok(self):
+        before, after = self.pair([run(True)] * 5, [run(True)] * 5)
+        self.assertEqual(self.regress(before, after, "L1", "--hard-gate", "case-a").returncode, 0)
+
+    def test_a_hard_gate_case_missing_from_the_result_is_confounded(self):
+        before, after = self.pair([run(True)] * 3, [run(True)] * 3)
+        out = self.regress(before, after, "L1", "--hard-gate", "no-such-case")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("confounded (1 judged, but no hard-gate result for no-such-case)", self.used())
+
+    def test_an_unjudged_hard_gate_case_beside_a_judged_one_is_confounded(self):
+        before = self.write("before.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 3)])
+        after = self.write("after.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 2)])
+        out = self.regress(before, after, "L1", "--hard-gate", "case-b")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("confounded (1 judged, but 1 unjudged: case-b)", self.used())
+
+    def test_a_hard_gate_case_only_in_the_result_is_confounded(self):
+        before = self.write("before.json", [case("case-a", [run(True)] * 3)])
+        after = self.write("after.json", [case("case-a", [run(True)] * 3), case("case-b", [run(True)] * 3)])
+        out = self.regress(before, after, "L1", "--hard-gate", "case-b")
+        self.assertIn("no hard-gate result for case-b", out.stdout)
+
+    def test_a_baseline_with_no_passing_run_and_an_edit_with_none_is_costly(self):
+        before, after = self.pair([priced(True, 1)] + [priced(False, 1)] * 4, [priced(False, 1)] * 5, name="case-a")
+        out = self.regress(before, after, "L1", "--max-cost-ratio", "2")
+        self.assertIn("COSTLY", out.stdout)
+
+    def test_a_nan_cost_is_confounded_when_the_gate_is_on(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, float("nan"))] * 3)
+        out = self.regress(before, after, "L1", "--max-cost-ratio", "2")
+        self.assertIn("confounded (1 judged, none dropped, a run has no costUsd)", self.used())
+        self.assertEqual(out.returncode, 1)
+
+    def test_a_boolean_cost_is_confounded_when_the_gate_is_on(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, True)] * 3)
+        self.regress(before, after, "L1", "--max-cost-ratio", "2")
+        self.assertIn("a run has no costUsd", self.used())
+
+    def test_a_nan_or_infinite_max_cost_ratio_is_refused(self):
+        before, after = self.pair([priced(True, 1)] * 3, [priced(True, 50)] * 3)
+        self.assertEqual(self.regress(before, after, "L1", "--max-cost-ratio", "nan").returncode, 2)
+        self.assertEqual(self.regress(before, after, "L1", "--max-cost-ratio", "inf").returncode, 2)
 
     def test_a_case_with_an_errored_run_is_unjudged(self):
         before, after = self.pair([run(True)] * 3, [run(False, "timeout")] * 3)

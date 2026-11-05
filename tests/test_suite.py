@@ -198,14 +198,99 @@ class SuiteTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertNotIn("stale", out.stdout)
 
-    def test_a_baseline_for_an_older_agent_file_is_stale_but_not_a_problem(self):
+    def test_a_baseline_for_an_older_agent_file_is_stale_and_a_problem(self):
         self.freeze("qa-engineer-flaky")
         self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 5)])])
         (self.agents / "qa-engineer.md").write_text("agent v2")
         out = self.check("--baselines", str(self.baselines), "--agents-dir", str(self.agents))
-        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("1 problem(s)", out.stdout)
         self.assertIn(f"stale    qa-engineer: no baseline for the file now ({fingerprint(self.agents / 'qa-engineer.md')})",
                       out.stdout)
+
+    def config_baseline(self):
+        config = self.tmp / "config"
+        (config / "rules").mkdir(parents=True)
+        (config / "sdlc.md").write_text("command v1")
+        (config / "rules" / "a.md").write_text("rule v1")
+        self.freeze("qa-engineer-flaky")
+        out = self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 5)])],
+                            "--config", str(config))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return config
+
+    def check_baselines(self):
+        return self.check("--baselines", str(self.baselines), "--agents-dir", str(self.agents))
+
+    def test_a_baseline_with_unchanged_config_is_not_stale(self):
+        self.config_baseline()
+        out = self.check_baselines()
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("stale", out.stdout)
+
+    def test_a_changed_config_file_makes_the_baseline_stale(self):
+        config = self.config_baseline()
+        (config / "rules" / "a.md").write_text("rule v2")
+        out = self.check_baselines()
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("a.md changed", out.stdout)
+
+    def test_a_new_config_file_makes_the_baseline_stale(self):
+        config = self.config_baseline()
+        (config / "rules" / "b.md").write_text("a new rule")
+        out = self.check_baselines()
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("b.md added", out.stdout)
+
+    def test_a_deleted_config_file_makes_the_baseline_stale(self):
+        config = self.config_baseline()
+        (config / "sdlc.md").unlink()
+        out = self.check_baselines()
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("sdlc.md gone", out.stdout)
+
+    def test_a_deleted_config_root_makes_the_baseline_stale(self):
+        config = self.config_baseline()
+        shutil.rmtree(config)
+        out = self.check_baselines()
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("config root gone", out.stdout)
+
+    def test_a_config_symlink_pointed_at_another_folder_makes_the_baseline_stale(self):
+        first, second, link = self.tmp / "first", self.tmp / "second", self.tmp / "link"
+        first.mkdir()
+        second.mkdir()
+        (first / "rule.md").write_text("rule v1")
+        (second / "rule.md").write_text("rule from elsewhere")
+        link.symlink_to(first)
+        self.freeze("qa-engineer-flaky")
+        self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 5)])], "--config", str(link))
+        link.unlink()
+        link.symlink_to(second)
+        out = self.check_baselines()
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("rule.md changed", out.stdout)
+
+    def test_a_named_pipe_in_the_config_folder_is_ignored(self):
+        config = self.tmp / "config"
+        config.mkdir()
+        (config / "rule.md").write_text("rule")
+        os.mkfifo(config / "pipe")
+        out = self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 5)])],
+                            "--config", str(config))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(list(json.loads(self.baseline_file().read_text())["config"]["files"]), [str(config / "rule.md")])
+
+    def test_a_baseline_without_config_says_nothing_about_config(self):
+        self.freeze("qa-engineer-flaky")
+        self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 5)])])
+        self.assertNotIn("config", json.loads(self.baseline_file().read_text()))
+        self.assertEqual(self.check_baselines().returncode, 0)
+
+    def test_a_config_path_that_does_not_exist_is_refused(self):
+        out = self.baseline([self.write_result("r.json", [case("qa-engineer-flaky", [run()] * 5)])],
+                            "--config", str(self.tmp / "nowhere"))
+        self.assertEqual(out.returncode, 2)
 
     def test_a_baseline_whose_agent_file_is_gone_is_reported_as_missing(self):
         self.freeze("qa-engineer-flaky")

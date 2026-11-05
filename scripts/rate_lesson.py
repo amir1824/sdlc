@@ -18,8 +18,14 @@ with the installed file.
 --regression <before.json> checks a promotion instead of rating a pair: <result.json> is an
 eval of all of the edited agent's cases, <before.json> the same cases before the edit. A case
 both files hold, with at least 3 runs and no error or skipped paid grader in each, is judged; it dropped when its pass
-rate fell by half or more. A case <before.json> holds and <result.json> lacks makes the verdict
-`confounded`. The verdict (`ok`, `REGRESSED` or `confounded`) goes to the `used` line, under a key
+rate fell by half or more, or, for a case named with --hard-gate (repeatable), by any amount. A case
+both files hold that cannot be judged, a case <before.json> holds and <result.json> lacks, and a
+--hard-gate case missing from either file make the verdict `confounded`.
+--max-cost-ratio R adds a cost gate to an otherwise `ok` verdict: cost per accepted task (every run's
+costUsd, failures included, over the runs that passed, summed over the judged cases) may grow to R times
+the baseline's; more is `COSTLY` (exit 1), and a run without a finite costUsd is `confounded`. Without
+it, cost is not looked at. A --hard-gate case that already fails in <before.json> cannot fall further.
+The verdict (`ok`, `REGRESSED`, `COSTLY` or `confounded`) goes to the `used` line, under a key
 of the start time and the --agent names (two agents' records in one minute do not replace each
 other), and nothing else in the lesson changes. The exit code is 0 only for `ok`.
 
@@ -28,6 +34,7 @@ The script ships in the sdlc repo, not in the plugin: run it from a clone.
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -85,31 +92,70 @@ def verdict(with_runs, without_runs, partial):
     return "no observed effect", counts
 
 
-def regression_verdict(before, after):
-    """Compare the cases both results hold; a case that fell by half or more in pass rate dropped."""
+def has_cost(run):
+    cost = run.get("costUsd")
+    return isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost)
+
+
+def cost_per_pass(runs):
+    """Cost per accepted task: what every run cost, failures included, over the runs that passed (None: none passed)."""
+    passes = pass_count(runs)
+    return sum(run["costUsd"] for run in runs) / passes if passes else None
+
+
+def cost_verdict(old_runs, new_runs, max_ratio):
+    """('ok'|'COSTLY'|'confounded', detail) for the judged cases together, by cost per accepted task."""
+    if not all(has_cost(run) for run in old_runs + new_runs):
+        return "confounded", "a run has no costUsd"
+    old, new = cost_per_pass(old_runs), cost_per_pass(new_runs)
+    if old is None:
+        return "confounded", "the baseline has no passing run to price"
+    if new is None:
+        return "COSTLY", f"no passing run for ${sum(run['costUsd'] for run in new_runs):.2f}"
+    detail = f"cost per pass ${old:.2f} -> ${new:.2f}"
+    return ("COSTLY", f"{detail}, over {max_ratio}x") if new > old * max_ratio else ("ok", detail)
+
+
+def regression_verdict(before, after, hard_gates=(), max_cost_ratio=None):
+    """Compare the cases both results hold. A case dropped when its pass rate fell by half or more;
+    a hard-gate case dropped on any fall. A case that cannot be judged makes the verdict confounded.
+    With max_cost_ratio, an `ok` also needs the judged cases' cost per pass within that multiple of before."""
     old_cases = {case.get("name"): case.get("arms", {}).get("with", []) for case in before.get("cases", [])}
-    judged, unjudged, dropped = 0, 0, []
+    judged, unjudged, dropped = 0, [], []
+    priced = ([], [])
     for case in after.get("cases", []):
-        old, new = old_cases.get(case.get("name")), case.get("arms", {}).get("with", [])
+        name = case.get("name")
+        old, new = old_cases.get(name), case.get("arms", {}).get("with", [])
         if old is None:
             continue
         if min(len(old), len(new)) < MIN_RUNS or not (is_clean(old) and is_clean(new)):
-            unjudged += 1
+            unjudged.append(name)
             continue
         judged += 1
-        if Fraction(pass_count(new), len(new)) - Fraction(pass_count(old), len(old)) <= -GAP:
-            dropped.append(f"{case.get('name')} {pass_count(old)}/{len(old)} -> {pass_count(new)}/{len(new)}")
+        priced[0].extend(old)
+        priced[1].extend(new)
+        fall = Fraction(pass_count(old), len(old)) - Fraction(pass_count(new), len(new))
+        if fall > 0 and (name in hard_gates or fall >= GAP):
+            dropped.append(f"{name} {pass_count(old)}/{len(old)} -> {pass_count(new)}/{len(new)}")
     if dropped:
         return "REGRESSED", ", ".join(dropped)
     if judged == 0:
         return "confounded", "no case judged"
-    missing = sorted(name for name in old_cases if name not in {case.get("name") for case in after.get("cases", [])})
+    present = {case.get("name") for case in after.get("cases", [])}
+    missing = sorted(name for name in old_cases if name not in present)
     if missing:
         return "confounded", f"{judged} judged, but the result lacks {', '.join(missing)}"
-    skipped = f", {unjudged} unjudged" if unjudged else ""
+    if unjudged:
+        return "confounded", f"{judged} judged, but {len(unjudged)} unjudged: {', '.join(unjudged)}"
+    unseen = sorted(name for name in hard_gates if name not in old_cases)
+    if unseen:
+        return "confounded", f"{judged} judged, but no hard-gate result for {', '.join(unseen)}"
     if before.get("partial") or after.get("partial"):
-        return "confounded", f"the eval stopped early, {judged} judged{skipped}, none dropped"
-    return "ok", f"{judged} judged{skipped}, none dropped"
+        return "confounded", f"the eval stopped early, {judged} judged, none dropped"
+    if max_cost_ratio is None:
+        return "ok", f"{judged} judged, none dropped"
+    rating, detail = cost_verdict(*priced, max_cost_ratio)
+    return rating, f"{judged} judged, none dropped, {detail}"
 
 
 def fingerprint(path):
@@ -200,7 +246,13 @@ def main():
                         help="an agent file whose name and hash go into the entry")
     parser.add_argument("--regression", type=Path, metavar="BEFORE",
                         help="the eval result from before the agent edit; check the edit for regressions")
+    parser.add_argument("--hard-gate", action="append", default=[], metavar="CASE",
+                        help="a safety, security or approval case: any fall in its pass rate is a regression")
+    parser.add_argument("--max-cost-ratio", type=float, metavar="R",
+                        help="with --regression: the edit is COSTLY when cost per passing run grew by more than R times")
     args = parser.parse_args()
+    if args.max_cost_ratio is not None and (args.regression is None or not 0 < args.max_cost_ratio < math.inf):
+        fail("--max-cost-ratio needs --regression and a positive, finite number")
 
     result = read_json(args.result)
     before = read_json(args.regression) if args.regression else None
@@ -222,7 +274,7 @@ def main():
                                  bool(result.get("partial")))
         key = f"eval {pair} {started}"
     else:
-        rating, detail = regression_verdict(before, result)
+        rating, detail = regression_verdict(before, result, set(args.hard_gate), args.max_cost_ratio)
         key = " ".join(["regression", started, *(path.stem for path in agents)])
 
     lines = text.split("\n")
@@ -249,6 +301,8 @@ def main():
         print(f"  {lesson_id} was promoted: revert its text in the agent or skill it was written into.")
     if rating == "REGRESSED":
         print(f"  {lesson_id}: the agent edit made a case worse: revert it, or fix it and run both evals again.")
+    if rating == "COSTLY":
+        print(f"  {lesson_id}: the agent edit costs more per passing run than allowed: keep it only if the owner accepts the cost.")
     if before is not None and rating != "ok":
         sys.exit(1)
 
