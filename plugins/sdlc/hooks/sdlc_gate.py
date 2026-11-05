@@ -3,21 +3,26 @@
 
 `prompt` (UserPromptSubmit): a typed `/sdlc` locks code edits in that session; a reply of
 exactly `approve plan` or `אשר תוכנית` unlocks them and binds the approval to the hash of
-each `.sdlc/*/plan.md`; a reply of exactly `sdlc off` releases the session.
+each `.sdlc/*/plan.md`; with more than one plan.md the reply names the plan, `approve plan
+<folder>`. When that plan holds an `sdlc-scope` block, its patterns are frozen into the approval
+and only matching files may be edited. A reply of exactly `sdlc off` releases the session.
 `tool` (PreToolUse): denies an edit in the project while the session is locked or after an
-approved plan.md changed or a new one appeared, a `fix:` commit without an `Evidence:` line
-(a message it cannot read is judged on the command text), a Bash command that writes from a
-read-only review agent or while the session is locked, and a Bash command that writes to the gate's state.
+approved plan.md changed or a new one appeared, an edit outside the frozen scope, a `fix:`
+commit without an `Evidence:` line (a message it cannot read is judged on the command text),
+a Bash command that writes from a read-only review agent or while the session is locked, and a Bash
+command that writes to the gate's state.
 
-Fails open, except that a crash of the `tool` hook in a session that is locked or has an approved plan
-denies the action (`sdlc off` releases it). Any other error exits non-zero (never 2), so Claude Code
-lets the action through.
-SDLC_GATE=off disables it. SDLC_GATE_HOME (default ~/.claude) holds sdlc-gate/ and rules/.
+Fails open, except where an error would lift a limit that is on: a crash of the `tool` hook in a
+session that is locked or has an approved plan denies the action (`sdlc off` releases it), and so does
+a file path the gate cannot read there. Any other error exits non-zero (never 2), so Claude Code lets
+the action through. SDLC_GATE=off disables the gate; SDLC_GATE_SCOPE=off only the scope.
+SDLC_GATE_HOME (default ~/.claude) holds sdlc-gate/ and rules/.
 ponytail: the gate stops a misread reply and a model's slip, not an agent set on getting past it. A Bash
-write is judged by a denylist, so a verb it does not list gets through; a command that names the gate's
-state folder and writes is denied, but a path built at run time is not seen; a run resumed in a new
-session needs the approval typed again; and input that cannot name a session fails open. An OS sandbox
-and a lock keyed by run lift these.
+write is judged by a denylist, so a verb it does not list gets through (a scope pattern is not checked
+for Bash); a command that names the gate's state folder and writes is denied, but a path built at run
+time is not seen; a run resumed in a new session needs the approval typed again; and input that cannot
+name a session fails open. An OS sandbox and a lock keyed by run lift these.
+Edits outside CLAUDE_PROJECT_DIR (a sibling package of a larger repo) are never gated.
 One file over the 200-line limit on purpose: `python3 -I` drops this folder from sys.path,
 so a second module would need path hacking to import.
 """
@@ -35,7 +40,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SDLC_PROMPT = re.compile(r"/(?:[\w-]+:)?sdlc(?:\s|$)")
-APPROVE_PROMPT = re.compile(r"(?:approve plan|אשר תוכנית)[\s.!]*", re.IGNORECASE)
+APPROVE_PROMPT = re.compile(
+    r"(?:approve plan|אשר תוכנית)(?:[ \t]+(?P<slug>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?))?[\s.!]*",
+    re.IGNORECASE)
 RELEASE_PROMPT = re.compile(r"/?sdlc off[\s.!]*", re.IGNORECASE)
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -115,7 +122,22 @@ MAX_COMMITS = 50
 EVIDENCE_REASON = ("sdlc-gate: a fix: commit needs an `Evidence:` line in its body: a log line quoted with its "
                    "file and line, or the name of a check that failed before the change. "
                    "Write only evidence you observed.")
-UNLOCK_WORDS = "exactly `approve plan` (or `אשר תוכנית`), or `sdlc off` to leave the pipeline"
+UNLOCK_WORDS = ("exactly `approve plan` (or `אשר תוכנית`; with more than one plan.md, add the plan's folder "
+                "name after it), or `sdlc off` to leave the pipeline")
+SCOPE_FENCE = "```sdlc-scope"
+SCOPE_MAX_ENTRIES, SCOPE_MAX_ENTRY, SCOPE_MAX_BYTES, SCOPE_MAX_PARTS = 100, 200, 8192, 100
+SCOPE_TAG = "sdlc-gate: [scope] "
+FENCE_MARKS = ("```", "~~~")
+PATH_KEYS = ("file_path", "notebook_path")
+# An approved scope never covers these, wherever they sit in the tree: they hold the hooks, the
+# settings and the tool config that bind the agent.
+PROTECTED_NAMES = (".git", ".claude", ".mcp.json")
+# Patterns that match almost all of these are no limit.
+# ponytail: a sample test, not a count against the real tree. A list of four or more plain file
+# extensions is refused as "nearly every file", and a union of narrow folder patterns (b*/**,
+# c*/** ...) can slip under it; the owner reads the frozen list in the approval notice. The upgrade
+# is to count matches against `git ls-files` at approval.
+BROAD_SAMPLES = ("a/b.txt", "src/x.py", "docs/y.md", "x", "deep/er/path/file.tsx")
 
 
 def gate_home() -> Path:
@@ -153,8 +175,12 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def emit(event: str, **fields: str) -> None:
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, **fields}}, ensure_ascii=False))
+def emit(event: str, system_message: str = "", **fields: str) -> None:
+    """The hook's reply: `fields` go to the model; `system_message`, when given, is for the owner."""
+    out: dict = {"hookSpecificOutput": {"hookEventName": event, **fields}}
+    if system_message:
+        out["systemMessage"] = system_message
+    print(json.dumps(out, ensure_ascii=False))
 
 
 def log_event(data: dict, kind: str, text: str) -> str:
@@ -182,18 +208,180 @@ def start_run(data: dict, lock: Path, approved: Path) -> None:
     emit("UserPromptSubmit", additionalContext=" ".join(notes))
 
 
-def approve(data: dict, lock: Path, approved: Path, text: str) -> None:
-    plans = plan_hashes(project_root(data))
+def fold(text: str) -> str:
+    """One spelling for a path or a pattern: NFC, and case-folded where the filesystem ignores case."""
+    text = unicodedata.normalize("NFC", text)
+    return text.casefold() if CASE_INSENSITIVE_FS else text
+
+
+def word_match(pattern: str, word: str) -> bool:
+    """One path segment against a pattern whose only wildcards are `*` and `?`; `[` and `]` are
+    plain characters. One backtrack point, so the cost is at most len(pattern) * len(word)."""
+    i = j = mark = 0
+    star = -1
+    while j < len(word):
+        if i < len(pattern) and pattern[i] == "*":
+            star, mark, i = i, j, i + 1
+        elif i < len(pattern) and pattern[i] in ("?", word[j]):
+            i, j = i + 1, j + 1
+        elif star >= 0:
+            mark += 1
+            i, j = star + 1, mark
+        else:
+            return False
+    return not pattern[i:].strip("*")
+
+
+def glob_match(glob: str, path: str) -> bool:
+    """Whether the `/`-separated path matches the pattern: `*` and `?` inside a segment, and a whole
+    `**` segment for any number of segments (a last one needs at least one). Never a regex on the
+    path, which an agent chooses: the hook's timeout fails open."""
+    pattern, parts = fold(glob).split("/"), fold(path).split("/")
+    if len(parts) > SCOPE_MAX_PARTS:
+        return False
+    failed: set[tuple[int, int]] = set()
+
+    def walk(i: int, j: int) -> bool:
+        if (i, j) in failed:
+            return False
+        if i == len(pattern):
+            ok = j == len(parts)
+        elif pattern[i] == "**":
+            ok = j < len(parts) if i == len(pattern) - 1 else any(walk(i + 1, k) for k in range(j, len(parts) + 1))
+        else:
+            ok = j < len(parts) and word_match(pattern[i], parts[j]) and walk(i + 1, j + 1)
+        if not ok:
+            failed.add((i, j))
+        return ok
+
+    return walk(0, 0)
+
+
+def is_broad(globs: list[str]) -> bool:
+    """Whether the patterns, taken together, match nearly every path of BROAD_SAMPLES."""
+    return sum(any(glob_match(glob, sample) for glob in globs) for sample in BROAD_SAMPLES) >= len(BROAD_SAMPLES) - 1
+
+
+def check_glob(glob: str) -> None:
+    if len(glob) > SCOPE_MAX_ENTRY:
+        raise ValueError(f"`{glob[:40]}...` is longer than {SCOPE_MAX_ENTRY} characters")
+    if any(unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp") for char in glob):
+        raise ValueError(f"`{glob!r}` has a control or invisible character, which an editor may not show")
+    if glob[0] in "/~":
+        raise ValueError(f"`{glob}` is an absolute path; write it relative to the project root")
+    if "\\" in glob:
+        raise ValueError(f"`{glob}` has a backslash; separate folders with /")
+    parts = glob.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"`{glob}` has an empty, `.` or `..` segment (a folder is `src/**`, not `src/`)")
+    if parts.count("**") > 3:
+        raise ValueError(f"`{glob}` has more than 3 `**` segments")
+    if is_broad([glob]):
+        raise ValueError(f"`{glob}` matches nearly every file, which is no limit")
+    if any(part.startswith(".") and word_match(fold(part), name) for part in parts for name in PROTECTED_NAMES):
+        raise ValueError(f"`{glob}` reaches .git or .claude (or .mcp.json), which no scope covers")
+
+
+def opens_scope_fence(line: str) -> bool:
+    return "sdlc-scope" in line and line.lstrip().startswith(FENCE_MARKS)
+
+
+def parse_scope(text: str) -> list[str] | None:
+    """The patterns of the plan's one `sdlc-scope` block; None when it has none; ValueError when it
+    is malformed or when what the gate would freeze could differ from what the owner reads, so
+    approval is refused while a person is watching, not at edit time."""
+    lines = text.split("\n")
+    if any(opens_scope_fence(line) and line.rstrip() != SCOPE_FENCE for line in lines):
+        raise ValueError("a line opens a code fence for `sdlc-scope` but is not the exact fence: three "
+                         "backticks at the start of the line, then `sdlc-scope`")
+    starts = [n for n, line in enumerate(lines) if line.rstrip() == SCOPE_FENCE]
+    if not starts:
+        return None
+    if len(starts) > 1:
+        raise ValueError("it holds more than one `sdlc-scope` block")
+    # ponytail: counting fence lines, so an unclosed inner fence can fool it; a second block is
+    # still refused and the owner reads the frozen list, so it can mis-signal but not widen.
+    if sum(line.lstrip().startswith(FENCE_MARKS) for line in lines[:starts[0]]) % 2:
+        raise ValueError("its `sdlc-scope` block sits inside another code fence")
+    body = []
+    for line in lines[starts[0] + 1:]:
+        if line.rstrip() == "```":
+            break
+        body.append(line)
+    else:
+        raise ValueError("its `sdlc-scope` block is not closed with ```")
+    if len("\n".join(body).encode()) > SCOPE_MAX_BYTES:
+        raise ValueError(f"its `sdlc-scope` block is longer than {SCOPE_MAX_BYTES} bytes")
+    entries = [line.strip() for line in body]
+    globs = [unicodedata.normalize("NFC", entry) for entry in entries if entry and not entry.startswith("#")]
+    if not globs:
+        raise ValueError("its `sdlc-scope` block is empty")
+    if len(globs) > SCOPE_MAX_ENTRIES:
+        raise ValueError(f"its `sdlc-scope` block has more than {SCOPE_MAX_ENTRIES} patterns")
+    for glob in globs:
+        check_glob(glob)
+    if is_broad(globs):
+        raise ValueError("its patterns together match nearly every file, which is no limit; "
+                         "name folders instead of a list of extensions")
+    return globs
+
+
+def has_scope_block(text: str) -> bool:
+    """Whether the plan holds a scope block or a fence that looks like one (parse_scope refuses it)."""
+    return any(opens_scope_fence(line) for line in text.split("\n"))
+
+
+def choose_plan(root: Path, plans: dict[str, str], slug: str | None) -> tuple[str | None, str]:
+    """(the plan to approve, "") or (None, why not). With several plan.md files and no scope block in
+    any, the choice decides nothing and no name is needed: (None, ""). Once one holds a block the owner
+    names the plan, because the choice decides which paths may be edited."""
+    names = sorted(plans)
+    if slug:
+        target = f".sdlc/{slug}/plan.md"
+        return (target, "") if target in plans else (None, f"no plan named `{slug}`; the plans are {', '.join(names)}.")
+    if len(names) == 1:
+        return names[0], ""
+    if any(has_scope_block((root / name).read_text(encoding="utf-8", errors="replace")) for name in names):
+        return None, (f"more than one plan.md exists ({', '.join(names)}) and one holds a scope block. The owner "
+                      "replies `approve plan <folder>` with the folder name under .sdlc/ of the plan they approve.")
+    return None, ""
+
+
+def refuse(why: str) -> None:
+    emit("UserPromptSubmit", system_message=f"sdlc-gate: {why}",
+         additionalContext=f"sdlc-gate: {why} Code edits stay locked.")
+
+
+def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None = None) -> None:
+    root = project_root(data)
+    plans = plan_hashes(root)
     if not plans:
         emit("UserPromptSubmit", additionalContext=(
             "sdlc-gate: no .sdlc/*/plan.md exists yet, so there is no plan to approve and code "
             "edits stay locked. Save plan.md, then ask the owner again."))
         return
-    approved.write_text(json.dumps({"at": now(), "plans": plans}))
+    target, globs = None, None
+    try:
+        target, why = choose_plan(root, plans, slug)
+        if why:
+            return refuse(why)
+        if target:
+            raw = (root / target).read_bytes()
+            globs = parse_scope(raw.decode("utf-8", errors="replace"))
+            plans[target] = hashlib.sha256(raw).hexdigest()
+    except (OSError, ValueError) as exc:
+        return refuse(f"{target or 'a plan.md'} cannot be approved: {exc}. Fix the plan, then ask the owner again.")
+    record = {"at": now(), "plans": plans}
+    if globs is not None:
+        record["scope"] = {"plan": target, "globs": globs}
+    line = log_event(data, "approve", text)  # logged before the approval takes effect: a log error leaves the lock on
+    log_event(data, "scope", f"{target or 'all plans'} scope={'none' if globs is None else len(globs)}")
+    approved.write_text(json.dumps(record))
     lock.unlink(missing_ok=True)
-    line = log_event(data, "approve", text)
-    emit("UserPromptSubmit", additionalContext=(
-        f"sdlc-gate: plan approval recorded: {line}. Bound to: {', '.join(plans)}. Copy this line "
+    limit = ("No `sdlc-scope` block was approved, so edits are not limited to a set of paths." if globs is None
+             else f"Edits are limited to {len(globs)} pattern(s) from {target}: {', '.join(globs)}.")
+    emit("UserPromptSubmit", system_message=f"sdlc-gate: plan approved. {limit}", additionalContext=(
+        f"sdlc-gate: plan approval recorded: {line}. Bound to: {', '.join(plans)}. {limit} Copy this line "
         "into status.md. A change to any of these plan.md files locks code edits again."))
 
 
@@ -216,8 +404,10 @@ def on_prompt(data: dict) -> None:
             release(data, lock, approved, text)
     elif SDLC_PROMPT.match(text):
         start_run(data, lock, approved)
-    elif gated and APPROVE_PROMPT.fullmatch(text):
-        approve(data, lock, approved, text)
+    elif gated:
+        approval = APPROVE_PROMPT.fullmatch(text)
+        if approval:
+            approve(data, lock, approved, text, approval.group("slug"))
 
 
 def changed_plans(root: Path, approved: Path) -> list[str]:
@@ -236,7 +426,7 @@ def lock_reason(data: dict, root: Path) -> str:
         return ""
     try:
         changed = changed_plans(root, approved)
-    except (OSError, ValueError):
+    except Exception:  # any damage to the record counts as unreadable, and locks
         changed = ["an approved plan.md or the gate's record of it (unreadable)"]
     if changed:
         return (f"sdlc-gate: {', '.join(changed)} changed after the owner approved it, so code "
@@ -244,16 +434,92 @@ def lock_reason(data: dict, root: Path) -> str:
     return ""
 
 
+def approved_scope(data: dict) -> list[str] | None:
+    """The patterns frozen into this session's approval; None when it is not path-limited."""
+    approved = session_file(data, "approved")
+    if os.environ.get("SDLC_GATE_SCOPE", "").lower() == "off" or approved is None or not approved.exists():
+        return None
+    scope = json.loads(approved.read_text()).get("scope")
+    if scope is None:
+        return None
+    globs = scope["globs"]
+    if not isinstance(globs, list) or not globs or not all(isinstance(glob, str) for glob in globs):
+        raise ValueError("the scope in the gate's record is not a list of patterns")
+    return globs
+
+
+def scope_reason(data: dict, relative: str | None) -> str:
+    """The reason to deny an edit of `relative` (a path inside the project; None for one that leaves
+    it through a symlink), or "". Unlike the rest of the gate it denies when it cannot decide."""
+    try:
+        globs = approved_scope(data)
+        if globs is None:
+            return ""
+        if relative is not None and not protected(relative) and any(glob_match(glob, relative) for glob in globs):
+            return ""
+    except Exception as exc:
+        return (f"{SCOPE_TAG}the scope check failed ({type(exc).__name__}: {exc}), so this edit is not "
+                "allowed. Tell the owner; SDLC_GATE_SCOPE=off turns the scope off.")
+    if relative is None:
+        return f"{SCOPE_TAG}this path resolves outside the project, which an approved scope does not allow."
+    if protected(relative):
+        return f"{SCOPE_TAG}{relative} is outside the approved scope: no scope covers .git, .claude or .mcp.json."
+    return (f"{SCOPE_TAG}{relative} is outside the approved scope ({', '.join(globs)}). Add it to the "
+            f"`sdlc-scope` block of the plan and ask the owner to reply {UNLOCK_WORDS}.")
+
+
+def protected(relative: str) -> bool:
+    return any(part in PROTECTED_NAMES for part in relative.split("/"))
+
+
+def written_inside_project(data: dict, file_path: str) -> bool:
+    """Whether the path, as written and before symlinks are followed, lies in the project, by either
+    spelling of its root."""
+    base = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or "."
+    written = os.path.abspath(file_path)
+    return any(os.path.commonpath([written, root]) == root for root in (os.path.abspath(base), os.path.realpath(base)))
+
+
 def file_edit_reason(data: dict, file_path: str) -> str:
     if not file_path:
         return ""
+    file_path = os.path.join(str(data.get("cwd") or ""), file_path)
     target, root, state = canonical(file_path), canonical(project_root(data)), canonical(state_dir())
     if os.path.commonpath([target, state]) == state:
         return "sdlc-gate: the gate's state belongs to the owner; do not edit it."
     if os.path.commonpath([target, root]) != root:
+        return scope_reason(data, None) if written_inside_project(data, file_path) else ""
+    relative = Path(target).relative_to(root)
+    if relative.parts[:1] == (".sdlc",):
         return ""
-    first = Path(target).relative_to(root).parts[:1]
-    return "" if first == (".sdlc",) else lock_reason(data, project_root(data))
+    return lock_reason(data, project_root(data)) or scope_reason(data, relative.as_posix())
+
+
+def session_gated(data: dict) -> bool:
+    """Whether the session has a lock or an approval. Input that cannot name a session is not gated."""
+    try:
+        files = (session_file(data, "locked"), session_file(data, "approved"))
+        return any(path is not None and path.exists() for path in files)
+    except (AttributeError, OSError):  # a payload that is not a mapping, or state the hook cannot stat
+        return False
+
+
+def file_tool_reason(data: dict, tool_input: object) -> tuple[str, str]:
+    """(the reason to deny a file tool call, the path it is about), or ("", ""). An input the gate cannot
+    read is denied while a run is on: an exception here exits non-zero, which the host reads as allow."""
+    try:
+        for key in PATH_KEYS:
+            path = tool_input.get(key)  # type: ignore[attr-defined]
+            if path not in (None, ""):
+                reason = file_edit_reason(data, path)
+                if reason:
+                    return reason, str(path)
+    except Exception as exc:
+        if not session_gated(data):
+            raise
+        return (f"sdlc-gate: could not check this path ({type(exc).__name__}: {exc}), so the edit is not "
+                "allowed while the plan gate is on. SDLC_GATE=off turns the gate off."), "?"
+    return "", ""
 
 
 def unquote(word: str) -> str:
@@ -441,24 +707,25 @@ def deny(reason: str) -> None:
     emit("PreToolUse", permissionDecision="deny", permissionDecisionReason=reason)
 
 
+def note_scope_denial(data: dict, path: str) -> None:
+    """Log a scope denial after it was emitted, so a failed write cannot drop the denial."""
+    try:
+        log_event(data, "deny-scope", path)
+    except Exception:  # best effort: the denial is already printed
+        pass
+
+
 def on_tool(data: dict) -> None:
     tool, tool_input = data.get("tool_name", ""), data.get("tool_input") or {}
-    reason = ""
+    reason, path = "", "?"
     if tool in FILE_TOOLS:
-        reason = file_edit_reason(data, tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        reason, path = file_tool_reason(data, tool_input)
     elif tool == "Bash":
         reason = bash_reason(data, str(tool_input.get("command", "")))
     if reason:
         deny(reason)
-
-
-def is_gated(data: dict) -> bool:
-    """Whether the session has a lock or an approval. Input that cannot name a session is not gated."""
-    try:
-        files = (session_file(data, "locked"), session_file(data, "approved"))
-        return any(path is not None and path.exists() for path in files)
-    except (AttributeError, OSError):  # a payload that is not a mapping, or state the hook cannot stat
-        return False
+        if reason.startswith(SCOPE_TAG):
+            note_scope_denial(data, str(path))
 
 
 def trace(mode: str, data: dict) -> None:
@@ -483,7 +750,7 @@ def main() -> int:
         try:
             on_tool(data)
         except Exception as error:  # a crash must not open a gate the owner closed
-            if not is_gated(data):
+            if not session_gated(data):
                 raise
             deny(f"sdlc-gate: the gate failed ({type(error).__name__}) while this session is locked or has an "
                  "approved plan, so it denies this action. The owner can reply `sdlc off` to release the session.")
