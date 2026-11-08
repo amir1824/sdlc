@@ -22,7 +22,7 @@ await run('status shipped', () => api.handleSetStatus({ params: { id: 'o-1' }, b
 await run('status pending', () => api.handleSetStatus({ params: { id: 'o-2' }, body: { status: 'pending' } }));
 await run('status bogus', () => api.handleSetStatus({ params: { id: 'o-2' }, body: { status: 'lost' } }));
 await run('status missing order', () => api.handleSetStatus({ params: { id: 'o-99' }, body: { status: 'paid' } }));
-await run('BUG status cancelled via http', () => api.handleSetStatus({ params: { id: 'o-3' }, body: { status: 'cancelled' } }));
+await run('OPEN status cancelled via http', () => api.handleSetStatus({ params: { id: 'o-3' }, body: { status: 'cancelled' } }));
 for (const u of ['u-3', 'u-4', 'admin-1', 'nobody']) {
   await run(`refund by ${u}`, () => api.handleRefund({ user: u, params: { id: 'o-2' } }));
 }

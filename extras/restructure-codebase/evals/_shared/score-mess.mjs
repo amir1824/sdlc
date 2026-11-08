@@ -59,7 +59,6 @@ try { after = golden(ws); } catch (e) { after = null; }
 const same = (k) => after && JSON.stringify(before[k]) === JSON.stringify(after[k]);
 const bugKeys = Object.keys(before).filter((k) => k.startsWith('BUG '));
 const bugs = {
-  'B1 http rejects cancelled': after ? after['BUG status cancelled via http']?.status === 200 : false,
   'B2 refund uses the generic template': after ? !/Update on order/.test(JSON.stringify(after['BUG template order.refunded'])) : false,
   'B3 paying after a mailer reset throws': after ? !after['BUG pay after mailer reset']?.error : false,
 };
@@ -68,13 +67,14 @@ const traps = {
   'T2 yen has no decimals kept': same('order in JPY'),
   'T3 support can refund kept': same('canRefund u-4') && same('refund by u-4'),
 };
-const unintended = after ? Object.keys(before).filter((k) => !k.startsWith('BUG ') && !same(k)) : ['public API broken'];
+// OPEN keys are a judgment call (see MESS.md): either answer is accepted.
+const unintended = after ? Object.keys(before).filter((k) => !k.startsWith('BUG ') && !k.startsWith('OPEN ') && !same(k)) : ['public API broken'];
+const openChanged = !!after && !same('OPEN status cancelled via http');
 // a bug fix may also change the messages that follow it; those keys are allowed when the fix was made
-const allowedIfFixed = { 'other messages': bugs['B3 paying after a mailer reset throws'] || bugs['B1 http rejects cancelled'], 'status counts': bugs['B1 http rejects cancelled'], 'revenue': false };
+const allowedIfFixed = { 'other messages': bugs['B3 paying after a mailer reset throws'] || openChanged, 'status counts': openChanged, 'revenue': false };
 const unexplained = unintended.filter((k) => !allowedIfFixed[k]);
 const report = existsSync(path.join(ws, 'REPORT.md')) ? read(path.join(ws, 'REPORT.md')) : '';
 const reported = {
-  'B1 reported': bugs['B1 http rejects cancelled'] ? /cancel/i.test(report) : null,
   'B2 reported': bugs['B2 refund uses the generic template'] ? /refund/i.test(report) && /template/i.test(report) : null,
   'B3 reported': bugs['B3 paying after a mailer reset throws'] ? /init/i.test(report) : null,
 };
@@ -90,7 +90,7 @@ const count = (o) => Object.values(o).filter((v) => v === true).length;
 console.log(JSON.stringify({
   problemsFound: count(found), problemsFixed: count(problems), problemsTotal: Object.keys(problems).length,
   notFound: Object.keys(found).filter((k) => !found[k]),
-  bugsFixed: count(bugs), bugsTotal: 3, bugsReported: count(reported),
+  bugsFixed: count(bugs), bugsTotal: 2, bugsReported: count(reported),
   trapsKept: count(traps), trapsTotal: 3,
   unexplainedBehaviourChanges: unexplained,
   testsSkippedLeft: /test\.skip/.test(tests),

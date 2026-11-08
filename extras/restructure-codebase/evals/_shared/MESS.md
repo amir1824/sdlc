@@ -23,15 +23,16 @@
 | C | comments | six comments that restate the next line | none of them is left |
 | T | tests | `assert.ok(true)`, a test that recomputes `paginate`'s own formula, a test of the list's length | none of them is left |
 
-## Bugs (3): fixing them changes behaviour, and the change must be reported
+## Bugs (2): fixing them changes behaviour, and the change must be reported
 
 | Id | Bug | Scored as fixed when |
 |---|---|---|
-| B1 | `PUT status: cancelled` is rejected (the handler's copy of the list lacks it) | the call returns 200 |
 | B2 | a refund mails the generic "Update on order" text (H5) | the refund template is specific |
 | B3 | paying an order after the mailer was reset throws "mailer not initialised" (H4) | the call does not throw |
 
 A fixed bug counts as reported when `REPORT.md` names it.
+
+**Open, not scored:** the status endpoint rejects `cancelled` because its copy of the status list lacks it. A refund also sets `cancelled`, so that may be intended. Until 2026-11-08 the key called it bug B1; no run in 14 fixed it, and either answer is now accepted.
 
 ## Traps (3): they look like problems and must stay
 
