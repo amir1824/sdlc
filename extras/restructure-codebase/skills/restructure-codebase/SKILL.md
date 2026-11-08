@@ -1,76 +1,141 @@
 ---
 name: restructure-codebase
-description: Restructure a whole codebase (or a large area of it) so each fact has one definition and each module depends only on things that change less, then prove the behaviour did not change. Use only when the user asks to untangle, restructure or clean up the codebase as a whole; not for a single bug, feature or file.
-argument-hint: "[area or concern to focus on]"
+description: Untangle a whole codebase in one pass, so agents working in it read less per change, break less without noticing, and debug faster.
+argument-hint: "[optional area or concern to focus on]"
 ---
 
-Restructure this codebase and finish the job. A good result is one where a typical change lands in one place, and the program does what it did before, except for bugs you fixed and changes the owner approved.
+Start a thorough refactor of this codebase and complete it to the end.
 
-## Rules that hold the whole way
+Treat this as a goal.
 
-1. **Behaviour is the contract.** Every change you make must keep what a user, caller or other service can observe: responses, error messages, defaults, events, stored data, UI states. A change that does not is a *behaviour change*. Write each one in `restructure-log.md` the moment you make it, with its kind (`bug fix` or `owner approved`) and the evidence. If it is neither, undo it.
-2. **Fix bugs; ask only about intent.** A bug is behaviour the code itself contradicts: a copy of a list that disagrees with its source, a skipped test that states the expected result, a call order only some callers follow, a crash on a path the code already offers. Fix it unless the owner said not to, and log it as a `bug fix` with that evidence. Untangling usually exposes these, so keeping one in place to "preserve behaviour" is a miss. Ask the owner only when the change is to behaviour that looks intended (removing a public route, tightening a permission, changing a default): one batch of questions, then carry on. Park what stays undecided in the log under *Deferred*.
-3. **Never fix by deleting evidence.** A failing test is a finding. Do not skip, loosen or quarantine it to get green.
+**Why do this at all?**
 
-## 0. Freeze the starting point
+- **Better output:** agents write better code in a well-structured codebase.
+- **Cheaper & faster changes:** agents spend fewer tokens searching and more on the problem.
+- **Fewer silent breaks:** agents break less without noticing.
+- **Faster debugging:** agents find root causes faster.
 
-- Note the starting commit and keep it reachable (`git tag restructure-base` or write the SHA in the log).
-- Run every gate the project has (types, lint, tests, boundary checks) and record what passes. A gate that already fails is listed, not fixed on the way.
-- For each area you will touch with no test around its observable behaviour, write a small characterization test first: it asserts what the code does today, quirks included. Those tests are your safety net for step 4.
+**1. Ask**
 
-## 1. Ask which extras to do
+Besides untangling the codebase, there are two other things you may do:
 
-Offer these two, with their exact wording, and do only what is chosen. If the user already stated their choice, use it and do not ask again.
+| Addition | What it does |
+| --- | --- |
+| **Comments** | Remove comments that only restate the code. |
+| **Tests** | Remove tests that wouldn't catch a real bug, and fix the ones that fail without one. |
 
-| Extra | What it does |
-|---|---|
-| **Comments** | Remove comments that only say what the next line says. Keep comments about things outside the code (a proxy, a vendor, a rule, a deadline) and `TODO`s that still describe a real gap. |
-| **Tests** | Remove tests that would pass for any implementation or only repeat the code under test; rewrite tests tied to internals so they assert behaviour. Never remove the only test of a real behaviour. |
+List these (with their exact descriptions) for the user and ask which ones to do. Then do only those.
 
-## 2. List every problem before changing anything
+**2. List every problem**
 
-Walk the code with one question: **do these pieces change together?** Record each wrong answer as `path:line  problem`.
+Don't change anything yet.
 
-- **Together, but nothing shows it:** copies of a rule or value; one module reading state another one sets; a feature spread over layers; a call order every caller must know; two lists of the same things (a menu and a palette, a switch and a table).
-- **Tied, but change for different reasons:** callers using a module's internals; stable code importing volatile code; a general function with a parameter only one caller understands; a module that is as complicated to use as to write.
-- **No reason to exist:** pass-through wrappers; options and extension points nothing varies; dead code; re-exports nobody imports.
-- **Special cases:** an `if` for one value, a parameter for one caller, a swallowed error, a retry or sleep, a disabled test. Each one is a requirement the design never named. Find out which are still real (keep them, and make them explicit) and which only patch another problem (the redesign removes them).
+Go through the codebase asking one thing: **should these pieces change together?** Write down every place the code gets the answer wrong, as in the [decision log example](#decision-log-example). There are only three ways to get it wrong.
 
-Use cheap tools to see the whole: a script that prints the import graph; a skeleton view of the signatures; `git log` to see which files change together; subagents to summarise one area each.
+**Hidden links:** pieces that must change together, where the code doesn't show it.
 
-## 3. Redesign
+- Copies of logic or values: change one and the others must change too, but nothing says so.
+- A module that reads a global or file set by another module: change that module and this one breaks, but nothing shows it (self-contained code).
+- A feature split across folders by layer, or related code in different folders: one change needs all of them, but the layout hides that (domain-driven code, colocation).
+- A call order or convention callers just have to know: change it and callers break, but nothing warns them (explicit over implicit).
 
-Group the problems by the **one fix** behind several of them; it rarely looks like any of them. Write the fix above its problems in the log. Judge each fix by three questions: do things that change together now live together, are things that do not change together untied, does everything depend on what changes less? Do not add an abstraction for its own sake: most fixes delete, merge, derive from one definition, or move.
+**Needless links:** pieces tied together that change for different reasons.
 
-## 4. Fix, in waves
+- Callers that depend on internals: the internals change for their own reasons, and the callers break anyway (encapsulation).
+- Stable code that imports something more volatile: the stable code has to change whenever the volatile code does (dependency direction).
+- A general function with a parameter only one workflow understands: the function has to change whenever that workflow does (caller vocabulary).
+- A shallow module: its interface changes whenever its internals do, so its callers change with it (deep modules).
 
-- Work area by area. After each wave run all the gates, then the characterization tests, then look at the diff of observable behaviour (routes, schemas, messages, labels, queue payloads, env names and defaults). Merge the next wave only when the last one is clean.
-- If subagents work in parallel, give each its own area and its own worktree, and have them report behaviour changes in the log format. Re-check the base of each worktree before it starts.
-- With *Comments* chosen, remove restating comments last in each area. With *Tests* chosen, do the test work last of all, because the tests are the safety net until then.
-- Keep the diff reviewable: if it reaches hundreds of files, say so, and split it by area into commits or pull requests that each stand alone.
+**Surplus:** pieces with no reason of their own to change.
 
-## 5. Check, and repeat
+- Wrappers: they only change when the thing they wrap does (pass-through wrappers).
+- Extension points and config for things that never vary: nothing will ever change them (speculative generality).
+- Dead code: nothing uses it, so nothing will ever need it to change.
 
-Run both checks, then fix what they find and run them again:
+Also write down every **special case**: code that exists for one situation instead of following from how the system works. Each one is a requirement the design never accounted for, so use them to work out what the system needs to be.
 
-1. **Structure.** Subagents search for the four kinds of problem from step 2 in what is left.
-2. **Behaviour.** One subagent per area compares the base commit with now, and reports every observable difference. It reads code and runs the app or the tests; it does not look for style. Each difference is either already in the log, a bug fix you can show, or something to undo or ask the owner about.
+- An `if` for one value
+- A parameter for a specific caller
+- A swallowed exception
+- A retry or sleep
+- A disabled test
 
-You are done when no worthwhile structural problem is left, the behaviour audit finds nothing outside the log, every gate that passed at the start passes now, and the count of special cases went down. Say so with numbers, not adjectives.
+**3. Redesign from first principles**
 
-## 6. Report
+Work out the fixes as if the system had known today's requirements from the start. Look for the one fix behind several problems, which often looks nothing like them. Don't fix special cases one by one.
 
-Finish with: files and lines changed; the problems fixed, grouped by fix; the *Behaviour changes* table (kind, what, evidence); the *Deferred* list with what each needs from the owner; and which gates ran, which did not and why.
+Ask the same thing of every fix, even one that looks better in the code: pieces that change together end up together, pieces that don't aren't tied, and everything depends on what changes less.
 
-## Log format
+Write each fix above the problems it solves, as in the [decision log example](#decision-log-example).
+
+**4. Fix everything on the list**
+
+Remove the special cases the redesign makes unnecessary, and keep the ones the system still needs. Don't go looking for bugs separately. A structural fix may fix some along the way, which is fine.
+
+If the user chose Comments:
+
+- Comments that restate the implementation, like `// sort first so the binary search works`, only change when it does, so they have no reason of their own to change. Remove them, even if they're phrased as a why.
+- Comments about something outside the code, like `// the proxy drops websockets, so we poll`, change when that does, and the code can't show it. Keep them.
+- Comments that explain a workaround om the codebase, like `// wait 100ms because the cache isn't ready yet`, only change when the problem behind the workaround does. They go when the redesign removes that problem.
+
+If the user chose Tests, do this last, because tests are your regression safety net. A test should fail on a regression, and only then:
+
+- Tests that repeat the implementation only change when it does, so they have no reason of their own to change. They check the same interpretation against itself, so remove them.
+- Tests tied to internals break when the code changes but behavior doesn't, so they change for the wrong reason. Rewrite them to depend on behavior, which changes less.
+- Tests that can't fail pass whatever the code does, so no change ever affects them. They aren't checking anything, so remove them.
+
+**5. Check, and repeat until done**
+
+Have subagents search for special cases, hidden links, needless links and surplus. **Do not stop until there is nothing worth fixing left.**
+
+You're done when:
+
+- **As few special cases are left in the system as possible.** How many remain is the best measure of how close you are.
+- A typical change lands in one place.
+- Every import is reasonable, and nothing imports anything more volatile than itself.
+- Subagents have no issues left that are worth fixing.
+- Intended behavior is the same as when you started, apart from bugs the refactor fixed. Test this at the end.
+
+**Tips**
+
+- **Start from a skeleton:** script away the function bodies, so the whole codebase fits in context.
+- **Summarize with subagents:** have them summarize parts of the codebase, so you can reason across all of it at once.
+- **Check the dependency graph often:** script one that shows what imports what, and rerun it as you go.
+- **Enter where leverage is highest:** start looking there first.
+- **Keep a decision log:** compaction is less of a problem that way.
+- **Use Git as evidence:** for how often pieces change, and what changes together.
+
+<a id="decision-log-example"></a>**Decision log example**
+
+The list of problems:
 
 ```md
-## Fixes
-- One `Dialog` returns focus to what had it before; the 100ms wait and the `skipRefocus` flag go.
-  - ui/LogoutDialog.tsx:30  waits 100ms after closing and hopes focus has landed
-  - ui/SettingsDialog.tsx:61  sets a global flag to stop that focus change
-## Behaviour changes
-- bug fix: saving a link no longer drops its `kind` (history/link.ts:44; test added)
-## Deferred
-- Remove `POST /chat/execute`? Needs the owner: a public route
+- `ui/LogoutDialog.tsx:30` waits 100ms after closing and hopes the message input can take focus by then.
+- `ui/Toolbar.tsx:40` and `ui/Menu.tsx:22` call the same actions, each with its own check for when they're disabled.
+- `checkout/submit.ts:9` depends directly on `payments/stripe.ts`.
+- `shortcuts/keymap.ts:18` has a switch with one case per action, separate from the menu's list.
+- `ui/CommandPalette.tsx:55` keeps its own list of actions, and it's missing the newer ones.
+- `ui/SettingsDialog.tsx:61` sets a global `skipRefocus` flag to stop the logout dialog it opens from sending focus to the message input.
+- `history/undo.ts:30` has a special case for every action that can be undone.
+- `refunds/refund.ts:22` wraps every Stripe call in `if (order.provider === "paypal")`.
+- Every action handler has to call `track()` by hand, and some don't.
+- `ui/Toolbar.test.tsx` and `ui/Menu.test.tsx` test the same actions separately.
+```
+
+Then with the fixes:
+
+```md
+- Make the general `Dialog` give focus back to whatever had it before it opened, so the wait and the flag can both go.
+  - `ui/LogoutDialog.tsx:30` waits 100ms after closing and hopes the message input can take focus by then.
+  - `ui/SettingsDialog.tsx:61` sets a global `skipRefocus` flag to stop the logout dialog it opens from sending focus to the message input.
+- Define a `PaymentProvider` interface that Stripe and PayPal both implement, so checkout and refunds no longer know which one they're using.
+  - `checkout/submit.ts:9` depends directly on `payments/stripe.ts`.
+  - `refunds/refund.ts:22` wraps every Stripe call in `if (order.provider === "paypal")`.
+- Make every user action a command with a name, a handler and an undo, so the toolbar, menu, shortcuts, palette and undo history all run from one list.
+  - `ui/Toolbar.tsx:40` and `ui/Menu.tsx:22` call the same actions, each with its own check for when they're disabled.
+  - `shortcuts/keymap.ts:18` has a switch with one case per action, separate from the menu's list.
+  - `ui/CommandPalette.tsx:55` keeps its own list of actions, and it's missing the newer ones.
+  - `history/undo.ts:30` has a special case for every action that can be undone.
+  - Every action handler has to call `track()` by hand, and some don't.
+  - `ui/Toolbar.test.tsx` and `ui/Menu.test.tsx` test the same actions separately.
 ```
