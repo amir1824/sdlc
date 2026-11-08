@@ -9,7 +9,7 @@ Restructure this codebase and finish the job. A good result is one where a typic
 ## Rules that hold the whole way
 
 1. **Behaviour is the contract.** Every change you make must keep what a user, caller or other service can observe: responses, error messages, defaults, events, stored data, UI states. A change that does not is a *behaviour change*. Write each one in `restructure-log.md` the moment you make it, with its kind (`bug fix` or `owner approved`) and the evidence. If it is neither, undo it.
-2. **Ask the owner only what the code cannot answer.** A deletion of a public route, a tighter permission, a changed default: ask first, one batch of questions, then carry on with everything else. Park what stays undecided in the log under *Deferred*.
+2. **Fix bugs; ask only about intent.** A bug is behaviour the code itself contradicts: a copy of a list that disagrees with its source, a skipped test that states the expected result, a call order only some callers follow, a crash on a path the code already offers. Fix it unless the owner said not to, and log it as a `bug fix` with that evidence. Untangling usually exposes these, so keeping one in place to "preserve behaviour" is a miss. Ask the owner only when the change is to behaviour that looks intended (removing a public route, tightening a permission, changing a default): one batch of questions, then carry on. Park what stays undecided in the log under *Deferred*.
 3. **Never fix by deleting evidence.** A failing test is a finding. Do not skip, loosen or quarantine it to get green.
 
 ## 0. Freeze the starting point
