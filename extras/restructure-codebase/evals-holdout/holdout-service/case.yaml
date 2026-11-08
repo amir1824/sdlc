@@ -1,0 +1,19 @@
+schema_version: "1.0"
+name: holdout-service
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 250
+  timeout_seconds: 3000
+  allowed_tools: [Read, Write, Edit, Glob, Grep, Bash, Skill, Agent]
+  runs: 3
+  prompt: |
+    This repository is a service; `npm test` runs its tests.
+    Untangle and restructure this whole codebase thoroughly.
+    Use the restructure-codebase skill if you have it.
+    I choose both extras: remove comments that only restate the code, and remove or fix tests that would not catch a real bug.
+    Everything exported from src/index.js is the public API: keep those names and signatures.
+    Do not ask me questions. Where a decision is not clearly yours, keep today's behaviour and say so.
+    You may fix real bugs you find; list each one as a behaviour change.
+    In this environment Bash cannot write or delete files; edit with your file tools, and list any file that should be deleted under "To delete" in REPORT.md.
+    When you are done, write REPORT.md with the problems you found (path:line), what you changed, every observable behaviour change, and the result of the final `npm test`.
