@@ -12,6 +12,12 @@
       "source": "./plugins/sdlc",
       "description": "A risk-tiered SDLC for Claude Code: 14 role agents, the /sdlc, /brutal-review and /security-audit commands, six gate skills, and gate hooks.",
       "version": "0.4.0"
+    },
+    {
+      "name": "restructure-codebase",
+      "source": "./extras/restructure-codebase",
+      "description": "A skill that restructures a whole codebase around single definitions and proves the behaviour did not change. Optional; it has an eval suite.",
+      "version": "0.2.0"
     }
   ]
 }
