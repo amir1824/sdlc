@@ -3,7 +3,7 @@ name: holdout-service
 context:
   scaffold_script: scaffold.sh
 execution:
-  max_turns: 250
+  max_turns: 200
   timeout_seconds: 3000
   allowed_tools: [Read, Write, Edit, Glob, Grep, Bash, Skill, Agent]
   runs: 3
