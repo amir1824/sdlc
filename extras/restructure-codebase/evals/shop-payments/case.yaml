@@ -1,0 +1,16 @@
+schema_version: "1.0"
+name: shop-payments
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 50
+  timeout_seconds: 900
+  allowed_tools: [Read, Write, Edit, Glob, Grep, Bash, Skill]
+  runs: 3
+  prompt: |
+    This repository is a small shop library; `npm test` runs its tests.
+    Restructure how payments are handled so that adding a third payment provider is a change in one place.
+    Use the restructure-codebase skill if you have it.
+    The functions exported from src/refund.js and src/checkout.js are the public API: keep their names and signatures.
+    Do not ask me questions, and keep today's behaviour exactly. Do not touch anything unrelated to payments.
+    When you are done, write REPORT.md with what you changed, every observable behaviour change (or the word "none"), and the result of the final `npm test`.

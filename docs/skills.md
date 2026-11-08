@@ -34,6 +34,7 @@ The skills below appear in the agents' "load when they fit" lists. They are opti
 | `ecc:react-performance` | ECC | `refactor-engineer` |
 | `ecc:security-review` | ECC | `backend-developer` |
 | `ecc:tdd-workflow` | ECC | `qa-engineer` |
+| `restructure-codebase` | this repo, `extras/restructure-codebase` (not bundled; has an eval suite) | you, by hand; not yet in an agent's list |
 
 `ecc:plan-prd` is an ECC command, not a skill folder.
 

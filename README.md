@@ -60,6 +60,7 @@ To keep your own version of a file (for example an agent with your own MCP tools
 | `plugins/sdlc/skills/` | the six skills the gates call |
 | `rules/` | 7 engineering rules for `~/.claude/rules/` |
 | `scripts/` | `install.sh`, `check.sh` (drift, hook wiring, versions), and the tools for the [lessons library](docs/lessons-library.md) |
+| `extras/` | optional skills that are not part of the plugin, each with its own eval suite (`restructure-codebase`) |
 | `tests/` | unit tests for the hooks and the scripts |
 | `docs/` | the diagram, the lessons library guide and the list of optional skills |
 

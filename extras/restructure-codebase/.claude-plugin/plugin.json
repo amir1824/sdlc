@@ -1,0 +1,8 @@
+{
+  "name": "restructure-codebase",
+  "version": "0.1.0",
+  "description": "A skill that restructures a whole codebase around single definitions and proves the behaviour did not change, with an eval suite that measures it.",
+  "author": { "name": "AmirBenShimol" },
+  "repository": "https://github.com/amir1824/sdlc",
+  "keywords": ["refactor", "skill", "eval"]
+}
