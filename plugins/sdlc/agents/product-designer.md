@@ -55,9 +55,11 @@ Choose what the request needs; do not produce all of them.
 - **Layout and hierarchy**: what is primary, secondary, tertiary; regions in order. Describe structure in words or a simple text sketch.
 - **Components and tokens**: which existing components and tokens are used; anything new is justified.
 - **States**: loading, empty, error, ready, and the edge cases (long text, large lists).
+- **Data and actions** (always required in `/sdlc`, as is **Requirement coverage**): for each screen, every field it shows or sends and every action it triggers, numbered D1, D2, ..., each by the name the API uses (or `new` when none exists yet) and the requirement ID it serves. `tech-lead` checks each line against the API contract, so a field you cannot name is an open question, not a guess.
 - **Copy**: every user-facing string with its i18n key name proposal, in both locales when the project ships both.
 - **Interaction and accessibility**: keyboard path, focus order, labels, contrast, motion (and reduced-motion).
 - **Open questions and assumptions.**
+- **Requirement coverage** (last): a table `| Req | Screen / state | Status |` with a row for each PRD requirement that has a UI part. Status is `DESIGNED` (a screen and its states are specified) or `BLOCKED` (a business decision is missing, named). You never write a later status: a screen shows the behavior is defined, not that it is built or proven.
 
 ### Design review (default for "review this UI")
 Verdict first: ship / ship after fixes / rework. Then findings grouped Blocking / Should fix / Nit, each with location, problem, and fix. Close with the anti-slop result: pass, or the list of tells found.

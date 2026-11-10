@@ -15,6 +15,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SDLC = REPO / "plugins" / "sdlc" / "commands" / "sdlc.md"
 TECH_LEAD = REPO / "plugins" / "sdlc" / "agents" / "tech-lead.md"
+PRODUCT_MANAGER = REPO / "plugins" / "sdlc" / "agents" / "product-manager.md"
+PRODUCT_DESIGNER = REPO / "plugins" / "sdlc" / "agents" / "product-designer.md"
+USER_RESEARCHER = REPO / "plugins" / "sdlc" / "agents" / "user-researcher.md"
 QA_ENGINEER = REPO / "plugins" / "sdlc" / "agents" / "qa-engineer.md"
 SECURITY_REVIEWER = REPO / "plugins" / "sdlc" / "agents" / "security-reviewer.md"
 RULES = REPO / "rules" / "sdlc.md"
@@ -243,6 +246,150 @@ class WordingTest(unittest.TestCase):
     def test_only_a_place_the_grep_names_is_an_owner_question(self):
         self.assertIn("Only a place that grep names counts", self.text)
         self.assertIn("a request whose grep names no such place has no Owner questions", self.text)
+
+    def test_claims_about_existing_components_carry_a_path_or_are_unverified(self):
+        researcher = USER_RESEARCHER.read_text(encoding="utf-8")
+        self.assertIn("carries `path:line` as its evidence or the label `unverified`, which `tech-lead` checks in Plan", self.text)
+        self.assertIn("The PRD's claims about existing components are grounded as in Discover", self.text)
+        self.assertIn("Claims in the Request about existing code are grounded as in Discover", self.text)
+        self.assertIn("**Ground every claim about existing code.**", PRODUCT_MANAGER.read_text(encoding="utf-8"))
+        self.assertIn("carries `path:line` as its evidence, or the label `unverified`", researcher)
+
+    def test_the_prd_ends_with_a_consistency_check_on_four_axes(self):
+        pm = PRODUCT_MANAGER.read_text(encoding="utf-8")
+        self.assertIn("**Consistency check** (last section)", pm)
+        self.assertIn("permissions (who may do it), identity", pm)
+        self.assertIn("the PRD ends with `product-manager`'s **Consistency check**", self.text)
+
+    def test_a_plan_with_a_multi_side_effect_flow_needs_a_failure_analysis(self):
+        tech_lead = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("**Failure analysis**: required for each flow in the change with more than one side effect", tech_lead)
+        self.assertIn("a crash between two steps", tech_lead)
+        self.assertIn("`Failure analysis: not needed", tech_lead)
+        self.assertIn("a plan with such a flow and no section goes back to `tech-lead`", self.text)
+
+    def test_a_plan_built_on_a_design_spec_checks_every_ui_need_against_the_contract(self):
+        designer = PRODUCT_DESIGNER.read_text(encoding="utf-8")
+        tech_lead = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("numbered D1, D2, ... with the requirement ID", self.text)
+        self.assertIn("**Data and actions** (always required in `/sdlc`, as is **Requirement coverage**)", designer)
+        self.assertIn("**UI contract check**: required when `design-spec.md` exists", tech_lead)
+        self.assertIn("`| Need (D-id, Req) | API contract | Schema | Service | Evidence | Verdict |`", tech_lead)
+        self.assertIn("a layer you could not read is `unverified` and counts as `missing`", tech_lead)
+        self.assertIn("A missing field or endpoint is a task, not a question for the owner.", tech_lead)
+        self.assertIn("a plan without it goes back to `tech-lead`", self.text)
+        self.assertIn("findings, Architecture, Failure analysis, UI contract check and render failures counted together", self.text)
+
+    def test_a_requirement_is_met_only_when_it_is_verified(self):
+        section = self.text[self.text.index("## Requirement status"):self.text.index("## Review rounds and cost")]
+        self.assertIn("- `DESIGNED`: its behavior is defined", section)
+        self.assertIn("- `IMPLEMENTED`: code for it exists", section)
+        self.assertIn("- `VERIFIED`: a check that ran and passed covers it", section)
+        self.assertIn("- `BLOCKED`: a business decision the owner must make is missing", section)
+        self.assertIn("A missing field, endpoint or other capability is a task in the plan, never BLOCKED.", section)
+        self.assertIn("A requirement is met only when it is VERIFIED.", section)
+        self.assertIn("the row falls back to IMPLEMENTED only if the re-run fails or is not done", section)
+
+    def test_a_blocked_requirement_is_answered_before_approve_plan_and_stops_build(self):
+        section = self.text[self.text.index("## Requirement status"):self.text.index("## Review rounds and cost")]
+        self.assertIn("`approve plan` is requested only after each BLOCKED row has a quoted decision", section)
+        self.assertIn("removes the row from the Requirement map", section)
+        self.assertIn("it counts toward the question limit", section)
+        self.assertIn("`approve plan` is requested only after each has a quoted answer, and Build does not start while one is open", self.text)
+
+    def test_every_status_but_verified_is_reported_as_not_done_even_on_the_lean_path(self):
+        section = self.text[self.text.index("## Requirement status"):self.text.index("## Review rounds and cost")]
+        self.assertIn("in the closing message after Verify", section)
+        self.assertIn("copied by the chair from `review.md` after the stale runs are re-run: only VERIFIED counts as met", self.text)
+        self.assertIn("`qa-engineer` writes the **Requirement status** table in `review.md`", self.text)
+
+    def test_the_status_tables_use_the_same_headers_in_the_command_and_the_agents(self):
+        designer = PRODUCT_DESIGNER.read_text(encoding="utf-8")
+        qa = QA_ENGINEER.read_text(encoding="utf-8")
+        self.assertIn("`| Req | Screen / state | Status |`", self.text)
+        self.assertIn("`| Req | Screen / state | Status |`", designer)
+        self.assertIn("`| Req | Status | Evidence |`", self.text)
+        self.assertIn("`| Req | Status | Evidence |`", qa)
+        self.assertIn("`| Req | Files | Check | Status |`", self.text)
+        self.assertIn("`| Req | Files | Check | Status |`", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_each_agent_writes_only_the_statuses_it_can_prove(self):
+        designer = PRODUCT_DESIGNER.read_text(encoding="utf-8")
+        qa = QA_ENGINEER.read_text(encoding="utf-8")
+        self.assertIn("You never write a later status", designer)
+        self.assertIn("A requirement that looks right but has no passing check is `IMPLEMENTED`, never `VERIFIED`", qa)
+        self.assertIn("`VERIFIED` needs the command you ran, its real output (which passed) and the fingerprint taken with the run", qa)
+        self.assertIn("copy every `BLOCKED` row of the design spec's coverage table", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_questions_to_the_owner_are_sorted_and_capped_by_risk_class(self):
+        pm = PRODUCT_MANAGER.read_text(encoding="utf-8")
+        self.assertIn("A summary asks at most 1 question for LOW, 2 for MEDIUM and 3 for HIGH", self.text)
+        self.assertIn("every Owner question from the rule above is a business decision, never a technical one", self.text)
+        self.assertIn("is listed under **Deferred questions** in the file and asked in the next round: it stays open", self.text)
+        self.assertIn("A default never answers it.", self.text)
+        self.assertIn("An Owner question (below) is always a business decision.", pm)
+        self.assertIn("each tagged `business` (the owner decides), `technical` (for `tech-lead`) or `verifiable`", pm)
+        self.assertIn("A technical question is yours to decide, not the owner's", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def planning_section(self):
+        return self.text[self.text.index("## Planning discipline"):self.text.index("## Review rounds and cost")]
+
+    def test_a_cheap_check_or_a_spike_comes_before_a_detailed_plan(self):
+        section = self.planning_section()
+        tech_lead = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("**Cheap checks first.**", section)
+        self.assertIn("is a **Spike**: the first task in the breakdown", section)
+        self.assertIn("marked `provisional until S<n>`", section)
+        self.assertIn("The plan has a line `Cheap checks:` listing what was checked or `none: <reason>`", section)
+        self.assertIn("There is one approval to start: the Spike runs inside Build, first", section)
+        self.assertIn("A Spike that fails sends the run back to Plan, outside the send-back budget", section)
+        self.assertIn("the chair starts no task that depends on a provisional decision until its Spike has passed", section)
+        self.assertIn("the added detail is a change to `plan.md` and an amendment that needs `approve plan` again", section)
+        self.assertIn("the Plan line is rewritten to `running - S<n> failed` and the Build line to `blocked - S<n> failed`", section)
+        self.assertIn("A read-only check runs before the plan is shown; a Spike runs only after it is approved", section)
+        self.assertIn("**Check before you detail.**", tech_lead)
+        self.assertIn("(marked `provisional until S<n>`, one paragraph and a fallback each)", tech_lead)
+        self.assertIn("The plan carries a line `Cheap checks:`", tech_lead)
+
+    def test_the_plan_cites_the_prd_and_the_design_by_id_and_planning_stops(self):
+        section = self.planning_section()
+        self.assertIn("a later file refers to it by ID and does not restate it, and a conflict is fixed in the file that owns the decision", section)
+        self.assertIn("`plan.md` opens with `Based on:` the sha256 of `prd.md` and of `design-spec.md`", section)
+        self.assertIn("The STOP summary states the plan's line count.", section)
+        self.assertIn("open the plan with `Based on:` the sha256 of `prd.md` and of `design-spec.md`", TECH_LEAD.read_text(encoding="utf-8"))
+        self.assertIn("- **Cite, do not copy.**", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_planning_stops_for_a_material_finding_only(self):
+        section = self.planning_section()
+        self.assertIn("change a decision, break a requirement or a **Must not happen** line, or leave a task in the breakdown unbuildable", section)
+        self.assertIn("A missing required section and a diagram that fails to render are still sent back", section)
+        self.assertIn("or a `[note]` that would change a decision, always counts as one of these", section)
+        self.assertIn("No new round of reviewers is started for the plan after `security-reviewer`'s read of the final `plan.md`", section)
+        self.assertIn("After the second send-back planning stops: what is still open goes to the owner or becomes a Spike", section)
+
+    def test_a_reviewer_who_read_an_earlier_version_gets_the_delta_and_an_agent_gets_a_context_package(self):
+        text = self.text
+        self.assertIn("- **Delta reviews.** A reviewer who has read an earlier version gets the delta, not the documents again", text)
+        self.assertIn("the chair keeps each version a reviewer read as `plan.v<n>.md` in the run folder", text)
+        self.assertIn("which the chair saves as `diff.v<n>.patch` in the run folder", text)
+        self.assertIn("A first whole read plus deltas that cover every change counts as having read the whole final file.", text)
+        self.assertIn("For a plan, a full re-read is required when the delta touches a trust boundary the plan names, the To-Be diagram or a **Must not happen** line", text)
+        self.assertIn("Each agent's report starts with a line `read:`", text)
+        self.assertIn("a builder always gets the plan's `sdlc-scope` block and any **Must not happen** line that touches its files", text)
+        self.assertIn("- **Context packages.** The chair gives each agent the paths of the files it needs and the IDs that apply to its task", text)
+        self.assertIn("not pasted text and not the whole plan", text)
+
+    def test_a_plan_decision_that_leaves_a_requirement_unmet_is_an_accepted_risk_with_a_release_condition(self):
+        section = self.planning_section()
+        tech_lead = TECH_LEAD.read_text(encoding="utf-8")
+        self.assertIn("lists it under **Accepted risks** with its ID, what stays unmet, the options and a release condition", section)
+        self.assertIn("that quote is the acceptance the Verify row asks for", section)
+        self.assertIn("The Requirement map keeps the requirement at DESIGNED with `accepted risk: <release condition>`", section)
+        self.assertIn("a release condition: what must be true before real data or real users", section)
+        self.assertIn("stays below `VERIFIED` with `accepted risk: <release condition>` in Evidence", QA_ENGINEER.read_text(encoding="utf-8"))
+        self.assertIn("the change is not for real data or users until it is met", section)
+        self.assertIn("The plan follows \"Planning discipline\"", self.text)
+        self.assertIn("- **Accepted risks**: each requirement or **Must not happen** line that a decision in this plan leaves unmet", tech_lead)
 
     def lean_section(self):
         return self.text[self.text.index("## Lean path"):self.text.index("## Architecture in the plan")]
