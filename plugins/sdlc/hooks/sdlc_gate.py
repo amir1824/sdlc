@@ -16,7 +16,8 @@ with a file tool; the main session and every other agent are denied, also throug
 or another case of the name. SDLC_GATE_SCOPE=off does not turn this off. A path that passes through a
 symlink, or holds a character outside plain ASCII, is refused at approval.
 ponytail: the freeze holds in the session that approved the plan and nowhere else (a second window, or
-a resume under a new session id, is not frozen), and it covers the four file tools only. A Bash write, a script, a formatter, or an edit
+a resume under a new session id, is not frozen), and it covers the four file tools only. A Bash
+write, a script, a formatter, or an edit
 of a file the test depends on (a fixture, conftest, test config) still changes what the test proves;
 `qa-engineer` may edit a frozen test at any time, so a weakening can be routed through it; another
 plugin's agent named `qa-engineer` passes; and the gate cannot see that the test ever failed. /sdlc
@@ -400,7 +401,7 @@ def check_test_path(path: str, root: Path) -> None:
         raise ValueError(f"`{path}` is under .sdlc/, which holds the run's own files")
     if (root / path).is_dir():
         raise ValueError(f"`{path}` is a folder; a line of `{TESTS_BLOCK}` is one exact file")
-    if os.path.realpath(root / path) != os.path.join(str(root), path):
+    if Path(os.path.realpath(root / path)) != root / path:
         raise ValueError(f"`{path}` passes through a symlink; name the real file")
 
 
@@ -660,9 +661,10 @@ def frozen_keys(root: Path, paths: list[str]) -> set[str]:
     return keys
 
 
-def frozen_reason(data: dict, spellings: list[str | None]) -> str:
+def frozen_reason(data: dict, spellings: list[str | None], fail_closed: bool = True) -> str:
     """The reason to deny an edit of a frozen reproduction test by anyone but qa-engineer, or "". The
-    record is read before the caller is, and like the scope it denies when it cannot decide."""
+    record is read before the caller is, and like the scope it denies when it cannot decide, unless
+    the caller asks otherwise."""
     try:
         paths = approved_tests(data)
         if paths is None:
@@ -670,6 +672,8 @@ def frozen_reason(data: dict, spellings: list[str | None]) -> str:
         frozen = frozen_keys(project_root(data), paths)
         hit = next((spelling for spelling in spellings if spelling and frozen_key(spelling) in frozen), None)
     except Exception as exc:
+        if not fail_closed:
+            return ""
         return (f"{TESTS_TAG}the frozen-tests check failed ({type(exc).__name__}: {exc}), so this edit is not "
                 "allowed. Tell the owner, who can reply `sdlc off` to release the session.")
     if hit is None or agent_name(data) == TESTS_WRITER:
@@ -692,7 +696,9 @@ def file_edit_reason(data: dict, file_path: str) -> str:
         return (scope_reason(data, None) or frozen_reason(data, [written])) if written is not None else ""
     relative = Path(target).relative_to(root)
     if relative.parts[:1] == (".sdlc",):
-        return frozen_reason(data, [written])  # a symlink made after approval can lead a frozen name here
+        # A symlink made after approval can lead a frozen name here. The run's own files stay writable
+        # when the record cannot be read: the chair must be able to save status.md to say so.
+        return frozen_reason(data, [relative.as_posix(), written], fail_closed=False)
     return (lock_reason(data, project_root(data)) or scope_reason(data, relative.as_posix())
             or frozen_reason(data, [relative.as_posix(), written]))
 

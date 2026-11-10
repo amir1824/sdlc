@@ -402,6 +402,19 @@ class OtherLimitsTest(FrozenGateTest):
         self.tamper({"paths": []})
         self.assertIn("frozen-tests check failed", self.reason(self.edit_as(self.frozen, BUILDER)))
 
+    def test_the_runs_own_files_stay_writable_with_frozen_tests(self):
+        self.approve_frozen()
+        self.assertEqual(self.edit_as(self.plan.parent / "status.md").stdout, "")
+
+    def test_the_runs_own_files_stay_writable_when_the_record_is_damaged(self):
+        self.approve_frozen()
+        self.tamper("tests/test_bug.py")
+        self.assertEqual(self.edit_as(self.plan.parent / "status.md").stdout, "")
+
+    def test_a_scope_fence_in_another_case_is_a_near_miss_too(self):
+        done = self.approve_plan("# Plan\n```SDLC-SCOPE\nsrc/**\n```\n")
+        self.refused(done, "not the exact fence")
+
     def test_the_hash_check_of_verify_is_a_command_the_read_only_reviewer_may_run(self):
         self.approve_frozen()
         done = self.bash("git hash-object tests/test_bug.py", agent_type="sdlc:brutal-reviewer")
