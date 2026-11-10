@@ -93,8 +93,32 @@ class ApprovalTest(FrozenGateTest):
     def test_a_question_mark_is_refused(self):
         self.refused(self.approve_frozen("tests/test_?.py"), "has a wildcard")
 
-    def test_a_bracket_is_refused(self):
-        self.refused(self.approve_frozen("tests/test_[ab].py"), "has a wildcard")
+    def test_a_bracket_is_a_plain_character_of_an_exact_path(self):
+        self.approve_frozen("pages/[id].test.tsx")
+        self.frozen_denial(self.edit_as(self.project / "pages" / "[id].test.tsx", BUILDER))
+
+    def test_a_look_alike_letter_is_refused(self):
+        self.refused(self.approve_frozen("tests/test_pаyment.py"), "outside ASCII")
+
+    def test_a_no_break_space_is_refused(self):
+        self.refused(self.approve_frozen("tests/test bug.py"), "outside ASCII")
+
+    def test_a_path_through_a_symlinked_folder_is_refused(self):
+        (self.project / "spec").mkdir()
+        (self.project / "tests").symlink_to(self.project / "spec")
+        self.refused(self.approve_frozen(), "passes through a symlink")
+
+    def test_a_path_that_is_a_symlink_is_refused(self):
+        self.frozen.parent.mkdir()
+        self.frozen.symlink_to(self.tmp / "elsewhere.py")
+        self.refused(self.approve_frozen(), "passes through a symlink")
+
+    def test_the_runs_folder_in_another_case_is_refused(self):
+        self.refused(self.approve_frozen(".SDLC/feature/test_bug.py"), "under .sdlc/")
+
+    def test_a_fence_in_another_case_is_a_near_miss(self):
+        done = self.approve_plan("# Plan\n```SDLC-TESTS\ntests/test_bug.py\n```\n")
+        self.refused(done, "not the exact fence")
 
     def test_an_absolute_path_is_refused(self):
         self.refused(self.approve_frozen("/etc/test_bug.py"), "absolute path")
@@ -227,24 +251,40 @@ class EditTest(FrozenGateTest):
         self.approve_frozen()
         self.frozen_denial(self.edit_as(self.project / "TESTS" / "Test_Bug.py", BUILDER))
 
-    def test_the_real_folder_behind_a_frozen_symlinked_folder_is_covered(self):
+    def test_multi_edit_is_denied_like_edit(self):
+        self.approve_frozen()
+        self.frozen_denial(self.edit_as(self.frozen, BUILDER, tool="MultiEdit"))
+
+    def test_the_real_folder_behind_a_frozen_name_that_became_a_symlink_is_covered(self):
+        self.approve_frozen()
         (self.project / "spec").mkdir()
         (self.project / "tests").symlink_to(self.project / "spec")
-        self.approve_frozen()
         self.frozen_denial(self.edit_as(self.project / "spec" / "test_bug.py", BUILDER))
 
-    def test_a_symlinked_folder_that_leads_to_a_frozen_test_is_covered(self):
+    def test_a_symlinked_folder_made_later_that_leads_to_a_frozen_test_is_covered(self):
         (self.project / "spec").mkdir()
-        (self.project / "tests").symlink_to(self.project / "spec")
         self.approve_frozen("spec/test_bug.py")
+        (self.project / "tests").symlink_to(self.project / "spec")
         self.frozen_denial(self.edit_as(self.frozen, BUILDER))
 
-    def test_a_frozen_path_that_leaves_the_project_through_a_symlink_is_covered(self):
+    def test_a_frozen_name_that_later_leaves_the_project_through_a_symlink_is_covered(self):
+        self.approve_frozen()
         outside = self.tmp / "outside"
         outside.mkdir()
         (self.project / "tests").symlink_to(outside)
-        self.approve_frozen()
         self.frozen_denial(self.edit_as(self.frozen, BUILDER))
+
+    def test_a_frozen_name_that_later_leads_into_the_runs_folder_is_covered(self):
+        self.approve_frozen()
+        (self.project / "tests").symlink_to(self.plan.parent)
+        self.frozen_denial(self.edit_as(self.frozen, BUILDER))
+
+    def test_an_alias_made_later_for_a_frozen_test_is_covered(self):
+        self.approve_frozen()
+        self.frozen.parent.mkdir()
+        self.frozen.write_text("def test_bug(): assert False\n")
+        (self.project / "alias.py").symlink_to(self.frozen)
+        self.frozen_denial(self.edit_as(self.project / "alias.py", BUILDER))
 
     def test_the_denial_names_the_way_to_change_a_frozen_test(self):
         self.approve_frozen()
@@ -255,11 +295,16 @@ class EditTest(FrozenGateTest):
     def test_a_denial_is_logged_with_the_caller(self):
         self.approve_frozen()
         self.edit_as(self.frozen, BUILDER)
-        self.assertIn("deny-tests", self.log.read_text())
-        self.assertIn("agent=backend-developer", self.log.read_text())
+        self.assertRegex(self.log.read_text(), r'deny-tests [^\n]*prompt="agent=backend-developer ')
+
+    def test_a_denial_of_the_main_session_is_logged_as_main(self):
+        self.approve_frozen()
+        self.edit_as(self.frozen)
+        self.assertRegex(self.log.read_text(), r'deny-tests [^\n]*prompt="agent=main ')
 
     def test_sdlc_off_releases_the_freeze(self):
         self.approve_frozen()
+        self.frozen_denial(self.edit_as(self.frozen, BUILDER))
         self.prompt("sdlc off")
         self.assertEqual(self.edit_as(self.frozen, BUILDER).stdout, "")
 
@@ -295,8 +340,27 @@ class ReapprovalTest(FrozenGateTest):
         done = self.prompt("approve plan")
         self.assertIn("Newly frozen since the last approval: tests/test_other.py.", self.context(done))
 
+    def test_a_removal_comes_before_the_scope_list_in_the_notice(self):
+        self.approve_plan(self.scope_block("tests/**") + self.frozen_block("tests/test_bug.py", "tests/test_other.py"))
+        self.plan.write_text(self.scope_block("tests/**") + self.frozen_block("tests/test_other.py"))
+        notice = json.loads(self.prompt("approve plan").stdout)["systemMessage"]
+        self.assertLess(notice.index("NO LONGER FROZEN"), notice.index("Edits are limited"))
+
+    def test_a_change_of_case_only_is_not_reported_as_a_removal(self):
+        self.approve_frozen("tests/Test_Bug.py")
+        self.plan.write_text("# Plan\n" + self.frozen_block("tests/test_bug.py"))
+        self.assertNotIn("NO LONGER FROZEN", self.context(self.prompt("approve plan")))
+
+    def test_the_same_paths_again_report_no_change(self):
+        self.approve_frozen()
+        self.plan.write_text("# Plan, reworded\n" + self.frozen_block("tests/test_bug.py"))
+        context = self.context(self.prompt("approve plan"))
+        self.assertNotIn("NO LONGER FROZEN", context)
+        self.assertNotIn("Newly frozen", context)
+
     def test_a_removal_the_owner_approved_unfreezes_the_test(self):
         self.approve_frozen()
+        self.frozen_denial(self.edit_as(self.frozen, BUILDER))
         self.plan.write_text("# Plan with no block\n")
         self.prompt("approve plan")
         self.assertEqual(self.edit_as(self.frozen, BUILDER).stdout, "")
@@ -338,17 +402,19 @@ class OtherLimitsTest(FrozenGateTest):
         self.tamper({"paths": []})
         self.assertIn("frozen-tests check failed", self.reason(self.edit_as(self.frozen, BUILDER)))
 
-    def test_the_read_only_reviewer_can_hash_a_frozen_test(self):
+    def test_the_hash_check_of_verify_is_a_command_the_read_only_reviewer_may_run(self):
         self.approve_frozen()
         done = self.bash("git hash-object tests/test_bug.py", agent_type="sdlc:brutal-reviewer")
         self.assertEqual(done.stdout, "")
 
-    def test_another_session_is_not_frozen(self):
+    def test_the_freeze_holds_only_in_the_session_that_approved(self):
         self.approve_frozen()
+        self.frozen_denial(self.edit_as(self.frozen, BUILDER))
         self.assertEqual(self.edit_as(self.frozen, BUILDER, session_id="other").stdout, "")
 
-    def test_the_gate_off_switch_is_unchanged(self):
+    def test_the_gate_off_switch_turns_the_freeze_off_too(self):
         self.approve_frozen()
+        self.frozen_denial(self.edit_as(self.frozen, BUILDER))
         self.assertEqual(self.edit_as(self.frozen, BUILDER, env={"SDLC_GATE": "off"}).stdout, "")
 
 
