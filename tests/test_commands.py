@@ -443,6 +443,59 @@ class WordingTest(unittest.TestCase):
         self.assertIn("best-effort guardrail", (REPO / "README.md").read_text(encoding="utf-8"))
 
 
+class ReproductionWordingTest(unittest.TestCase):
+    """The prompt text the frozen reproduction tests rest on; the gate enforces only the file-tool part."""
+
+    def setUp(self):
+        self.text = SDLC.read_text(encoding="utf-8")
+        self.agents = REPO / "plugins" / "sdlc" / "agents"
+
+    def test_a_fix_plan_holds_the_block_or_a_skip_line(self):
+        self.assertIn("holds one `sdlc-tests` block naming the reproduction test files, or the line "
+                      "`Reproduction test: skipped — <specific reason>`", self.text)
+
+    def test_the_red_run_comes_before_any_builder(self):
+        self.assertIn("`qa-engineer` writes the files in the block and runs them before any builder starts", self.text)
+
+    def test_a_passing_test_is_not_a_reproduction(self):
+        self.assertIn("A test that passes before the fix is not a reproduction", self.text)
+
+    def test_the_red_run_records_each_files_hash(self):
+        self.assertIn("for each frozen file the output of `git hash-object <file>`", self.text)
+
+    def test_verify_recomputes_the_hashes(self):
+        self.assertIn("`brutal-reviewer` runs `git hash-object` on each frozen file and compares it with **Red run**",
+                      self.text)
+
+    def test_the_chair_does_not_route_a_weakening_through_qa(self):
+        self.assertIn("The chair does not ask `qa-engineer` to change what a frozen test expects", self.text)
+
+    def test_the_command_says_what_the_hook_does_not_do(self):
+        self.assertIn("A Bash write, a script or a formatter that changes a frozen test is found by the hash check "
+                      "in Verify, not prevented", self.text)
+
+    def test_the_build_row_points_at_the_red_run(self):
+        self.assertIn("the first task of the stage is `qa-engineer`'s Red run", self.text)
+
+    def test_resume_sends_a_frozen_test_to_qa(self):
+        self.assertIn("A frozen reproduction test among them goes to `qa-engineer`", self.text)
+
+    def test_tech_lead_writes_the_block(self):
+        self.assertIn("a line holding three backticks and `sdlc-tests`, one exact file path per line",
+                      TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_qa_engineer_has_the_red_run_step(self):
+        self.assertIn("A test that passes is not a reproduction: say so and stop", QA_ENGINEER.read_text(encoding="utf-8"))
+
+    def test_the_backend_builder_leaves_a_frozen_test(self):
+        self.assertIn("is never yours to edit, and the gate hook denies it",
+                      (self.agents / "backend-developer.md").read_text(encoding="utf-8"))
+
+    def test_the_frontend_builder_leaves_a_frozen_test(self):
+        self.assertIn("is never yours to edit, and the gate hook denies it",
+                      (self.agents / "frontend-developer.md").read_text(encoding="utf-8"))
+
+
 class FingerprintTest(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())

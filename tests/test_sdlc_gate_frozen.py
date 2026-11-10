@@ -338,6 +338,11 @@ class OtherLimitsTest(FrozenGateTest):
         self.tamper({"paths": []})
         self.assertIn("frozen-tests check failed", self.reason(self.edit_as(self.frozen, BUILDER)))
 
+    def test_the_read_only_reviewer_can_hash_a_frozen_test(self):
+        self.approve_frozen()
+        done = self.bash("git hash-object tests/test_bug.py", agent_type="sdlc:brutal-reviewer")
+        self.assertEqual(done.stdout, "")
+
     def test_another_session_is_not_frozen(self):
         self.approve_frozen()
         self.assertEqual(self.edit_as(self.frozen, BUILDER, session_id="other").stdout, "")

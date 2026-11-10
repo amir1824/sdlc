@@ -1,5 +1,5 @@
 {
-  "description": "sdlc gates: no code before the owner approves the plan, Evidence: on fix commits, read-only review agents stay read-only, and a compaction in a run keeps the run's place",
+  "description": "sdlc gates: no code before the owner approves the plan, Evidence: on fix commits, read-only review agents stay read-only, a fix's reproduction tests are frozen for everyone but qa-engineer, and a compaction in a run keeps the run's place",
   "hooks": {
     "UserPromptSubmit": [
       {
