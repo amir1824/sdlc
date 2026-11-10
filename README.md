@@ -38,6 +38,13 @@ git clone https://github.com/amir1824/sdlc.git && cd sdlc && scripts/install.sh
   "PreToolUse": [
     { "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
       "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py tool", "timeout": 5 }] }
+  ],
+  "PreCompact": [
+    { "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py precompact || exit 0", "timeout": 5 }] }
+  ],
+  "SessionStart": [
+    { "matcher": "compact",
+      "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py compacted", "timeout": 5 }] }
   ]
 }
 ```
@@ -99,6 +106,7 @@ To keep your own version of a file (for example an agent with your own MCP tools
 - **`fix:` commits need evidence.** A `fix:` commit whose message has no `Evidence:` line is denied.
 - **Read-only agents stay read-only.** A Bash command from `tech-lead`, `security-reviewer`, `brutal-reviewer`, `analyst` or `leak-scanner` is denied when it matches a list of common writes: redirects, `rm`/`mv`/`cp`, inline interpreter code, git commands that change state, installs.
 - **The gate's own state is the owner's.** A Bash command that writes to `~/.claude/sdlc-gate/` is denied in every session.
+- **A compaction keeps the run's place.** In a session that holds a lock or an approval, `/compact` (or an automatic compaction) is told to keep the run's folder, its stage and the open owner questions and to drop what the handoff files already hold; afterwards the gate puts its own state and the newest three open `status.md` files back into the context, fenced and labelled as data (a symlink, a file outside the project or one over 64 kB is left out). `/sdlc` suggests `/compact` after `approve plan` and after `review.md` is saved; only you can run it. These two hooks change no state, and the `|| exit 0` on the first keeps a broken install from blocking a compaction. Whether compacting there lowers the cost of a run has not been measured, and the two extra hooks are optional in a manual install (`scripts/check.sh` checks the first two only).
 
 These gates are a best-effort guardrail. They stop a misread reply and a model's slip, not an agent set on getting past them: Bash writes are judged by a denylist, so a verb it does not list gets through, and a scope pattern is not checked for Bash. They do not show that your requirements are right, only that the workflow was followed. An action that must never happen belongs in Claude Code's permission deny rules or a sandbox.
 
