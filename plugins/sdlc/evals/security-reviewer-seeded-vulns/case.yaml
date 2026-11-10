@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: security-reviewer-seeded-vulns
+context:
+  scaffold_script: scaffold.sh

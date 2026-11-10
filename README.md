@@ -67,6 +67,7 @@ To keep your own version of a file (for example an agent with your own MCP tools
 | `plugins/sdlc/skills/` | the six skills the gates call |
 | `rules/` | 7 engineering rules for `~/.claude/rules/` |
 | `scripts/` | `install.sh`, `check.sh` (drift, hook wiring, versions), and the tools for the [lessons library](docs/lessons-library.md) |
+| `plugins/sdlc/evals/` | 39 eval cases for the agents and commands, run on demand with `scripts/verify.sh --evals` (it calls the model and costs money) |
 | `tests/` | unit tests for the hooks and the scripts |
 | `docs/` | the diagram, the lessons library guide and the list of optional skills |
 
@@ -129,4 +130,4 @@ The agents also list optional skills to load when they fit, mostly from ECC. The
 - To update, plugin users run `/plugin marketplace update sdlc`. With `--link`, `git pull` is enough. With a copy, run `scripts/install.sh` again.
 - `scripts/check.sh` lists every installed file as linked, same, DRIFT, local or missing, so you can see a local edit that never reached the repo.
 
-To change the plugin: edit the agent, command or rule in this repo, run `scripts/verify.sh` (it runs `scripts/check.sh` and the unit tests, and exits non-zero when either fails; this repo has no CI, so this is the gate), bump the version in both JSON files, add a `CHANGELOG.md` entry, and open a pull request. A change to how an agent behaves is worth an eval run before it ships.
+To change the plugin: edit the agent, command or rule in this repo, run `scripts/verify.sh` (it runs `scripts/check.sh` and the unit tests, and exits non-zero when either fails; this repo has no CI, so this is the gate), and for a change to how an agent or `/sdlc` behaves also `scripts/verify.sh --evals --case '<agent>-*'` (it stops at `SDLC_EVAL_MAX_USD`, default 5), bump the version in both JSON files, add a `CHANGELOG.md` entry, and open a pull request. A change to how an agent behaves is worth an eval run before it ships.

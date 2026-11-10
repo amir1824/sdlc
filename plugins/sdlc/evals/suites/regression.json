@@ -1,0 +1,17 @@
+{
+  "suite": "regression",
+  "cases": {
+    "tech-lead-plan": "8c9835da75ce660a7f62cb5159c60a13ee66577ebe3325134bf99605fbc99f66",
+    "tech-lead-tradeoff": "171db566257965f000268bc55194c96134c9add6f943251022e05220b154e78f",
+    "tech-lead-vague-request": "3ce07c5476c7b5bf57c9977d5ba1143c37880a00530004064be2ba0cb52ebbc6",
+    "tech-lead-just-give-code": "f6b41d83d21c35e625ded6ab0ad6530263c093519ac72f866100e847762f2edc",
+    "backend-developer-error-contract": "6157274e5311ef76ff5dc2e90b2e7cf93e25af56a0c17838ab5c5b7a1188d4c0",
+    "backend-developer-fix": "5b5d1a64f0ff70e6a739d967b2ce258d1392568b60f7bfeb73e3424845bb17c4",
+    "backend-developer-minimal-diff": "06a228228a1e59b2785e883df4b20ac0b17d777402a9d3f780c01335a541f573",
+    "backend-developer-reports-skipped": "8f0b6342cfb18c5b64066ae6abe9b38b2886e47b28c170fa7f83e6e24344ad75",
+    "qa-engineer-all-pass": "7e26f38685ff6e20cf4dbbeede43f728b49329c8cda091857996d2669f564b20",
+    "qa-engineer-flaky-test": "124344cb87e29561ea9c5afe99f1ff149e9aaebf3abfd9ee13945fe626692fe8",
+    "qa-engineer-runs-tests": "d8b44011682395a843001abd4d280840e4b454969a1098f57a2ffa569f5da1e3",
+    "qa-engineer-vague-spec": "179e1b0be16cb7e2b1121428921c648a73272ac665934a7c1bd324f2a13ef4cd"
+  }
+}

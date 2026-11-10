@@ -53,10 +53,13 @@ if [ -f "$lessons" ]; then
   python3 -I "$repo/scripts/check_lessons.py" --lessons "$lessons" --agents "$dest/agents" || drift=$((drift + 1))
 fi
 
-evals="${SDLC_EVALS:-}" # the eval folder of the plugin that holds suites/regression.json, e.g. my-agents-plugin/evals
-if [ -n "$evals" ] && [ -f "$evals/suites/regression.json" ]; then
+evals="${SDLC_EVALS:-}" # the eval folder that holds suites/regression.json; verify.sh names plugins/sdlc/evals
+if [ -n "$evals" ] && [ -f "$evals/suites/regression.json" ] && [ -d "$evals/baselines" ]; then
   python3 -I "$repo/scripts/suite.py" check "$evals/suites/regression.json" "$evals" \
     --baselines "$evals/baselines" --agents-dir "$evals/../agents" || drift=$((drift + 1))
+elif [ -n "$evals" ] && [ -f "$evals/suites/regression.json" ]; then
+  python3 -I "$repo/scripts/suite.py" check "$evals/suites/regression.json" "$evals" || drift=$((drift + 1))
+  echo "no baselines in $evals: the frozen cases were checked, the agents were not compared with a baseline"
 fi
 
 echo "sdlc $plugin_version: $drift problem(s). 'missing' agents, commands and hooks are normal when the plugin is installed instead; a MISSING rule is not."

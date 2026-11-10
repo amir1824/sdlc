@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: sdlc-define-gate-honest-verdict
+context:
+  scaffold_script: scaffold.sh

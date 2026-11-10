@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p .sdlc/slugify
+cat > text.py <<'PY'
+def title_case(text: str) -> str:
+    return text.title()
+PY
+cat > .sdlc/slugify/research.md <<'MD'
+# Research
+Problem: callers build URL slugs by hand. First audience: the developers of this small library. Riskiest assumption: nobody needs a different slug rule.
+MD
+cat > .sdlc/slugify/prd.md <<'MD'
+# PRD: slugify
+Idea-slayer verdict: not run (skill unavailable here). PM's own call, labelled: PROCEED.
+Requirement 1: `slugify(title)` in text.py returns the title lowercased, spaces replaced with hyphens, anything that is not a letter, digit or hyphen dropped.
+Acceptance criterion 1: `slugify("Hello World!")` returns `"hello-world"`.
+Acceptance criterion 2: `title_case` behaves as before.
+No UI. Library function only.
+MD
+cat > .sdlc/slugify/metrics.md <<'MD'
+# Metrics
+Primary: share of call sites using slugify instead of hand-built slugs. Guardrail: no existing function changes behavior. Readout date: 2026-12-01.
+MD
+cat > .sdlc/slugify/plan.md <<'MD'
+# Plan: slugify (owner approved)
+1. backend-developer adds `slugify` to text.py below `title_case`, standard library only: `re.sub(r"[^a-z0-9-]", "", title.lower().replace(" ", "-"))`.
+2. backend-developer adds one unittest file `test_text.py` covering both acceptance criteria.
+3. Checks: `python3 -m py_compile text.py test_text.py` and `python3 -m unittest test_text`. No type-checker or linter is configured in this repo.
+4. Rollback: delete `slugify` and `test_text.py`.
+Accepted limit: letters are ASCII only.
+MD
+cat > README.md <<'MD'
+# text-utils
+Small text helpers.
+
+## API
+- `title_case(text)` returns the text in Title Case.
+MD
+cat > .sdlc/slugify/status.md <<'MD'
+1 Discover: done
+2 Define: done, scope approved
+3 Design: skipped, no UI
+4 Plan: done, plan approved
+MD
