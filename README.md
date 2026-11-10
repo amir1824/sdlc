@@ -120,4 +120,4 @@ The agents also list optional skills to load when they fit, mostly from ECC. The
 - To update, plugin users run `/plugin marketplace update sdlc`. With `--link`, `git pull` is enough. With a copy, run `scripts/install.sh` again.
 - `scripts/check.sh` lists every installed file as linked, same, DRIFT, local or missing, so you can see a local edit that never reached the repo.
 
-To change the plugin: edit the agent, command or rule in this repo, run `scripts/check.sh` and `python3 -I -m unittest discover -s tests`, bump the version in both JSON files, add a `CHANGELOG.md` entry, and open a pull request. A change to how an agent behaves is worth an eval run before it ships.
+To change the plugin: edit the agent, command or rule in this repo, run `scripts/verify.sh` (it runs `scripts/check.sh` and the unit tests, and exits non-zero when either fails; this repo has no CI, so this is the gate), bump the version in both JSON files, add a `CHANGELOG.md` entry, and open a pull request. A change to how an agent behaves is worth an eval run before it ships.

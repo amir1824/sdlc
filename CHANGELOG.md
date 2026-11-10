@@ -4,6 +4,8 @@ All notable changes, newest first. Versions follow [semver](https://semver.org):
 
 ## Unreleased
 
+- **`scripts/verify.sh`.** One local command runs `scripts/check.sh` and the unit tests in one foreground process and exits non-zero when either fails. The repo has no CI, so this is the gate before a change ships; nothing runs it automatically.
+
 Four prompt fixes from notes the owner brought from one PRD of a feature built with the plugin; no agent or stage was added. The PRD itself is not in this repo, so the notes are the owner's report and were not re-checked here, and they do not show that the pipeline as a whole misses these: Design and Review may already catch some. No eval has measured the fixes.
 - **Code grounding.** A claim in `intent.md`, `research.md`, the PRD or a lean Request about an existing field, function, endpoint, table or file carries `path:line` or the label `unverified`, which `tech-lead` checks in Plan. The owner reported a PRD that cited a field the schema does not have.
 - **Consistency check.** The PRD ends with a pairwise check of the requirements on permissions, identity, statuses and writes; a contradiction is fixed or becomes an Owner question before the Define STOP.
