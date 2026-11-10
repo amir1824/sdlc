@@ -134,7 +134,7 @@ EVIDENCE_REASON = ("sdlc-gate: a fix: commit needs an `Evidence:` line in its bo
                    "Write only evidence you observed.")
 UNLOCK_WORDS = ("exactly `approve plan` (with more than one plan.md, add the plan's folder name after it), "
                 "or `sdlc off` to leave the pipeline")
-SCOPE_FENCE = "```sdlc-scope"
+SCOPE_BLOCK = "sdlc-scope"
 SCOPE_MAX_ENTRIES, SCOPE_MAX_ENTRY, SCOPE_MAX_BYTES, SCOPE_MAX_PARTS = 100, 200, 8192, 100
 SCOPE_TAG = "sdlc-gate: [scope] "
 FENCE_MARKS = ("```", "~~~")
@@ -312,34 +312,42 @@ def check_glob(glob: str) -> None:
         raise ValueError(f"`{glob}` reaches .git or .claude (or .mcp.json), which no scope covers")
 
 
-def opens_scope_fence(line: str) -> bool:
-    return "sdlc-scope" in line and line.lstrip().startswith(FENCE_MARKS)
+def opens_fence(line: str, tag: str) -> bool:
+    return tag in line and line.lstrip().startswith(FENCE_MARKS)
+
+
+def fenced_block(text: str, tag: str) -> list[str] | None:
+    """The lines inside the plan's one block fenced with three backticks and `tag`; None when it has
+    none; ValueError when what the gate would read could differ from what the owner reads."""
+    fence = "```" + tag
+    lines = text.split("\n")
+    if any(opens_fence(line, tag) and line.rstrip() != fence for line in lines):
+        raise ValueError(f"a line opens a code fence for `{tag}` but is not the exact fence: three "
+                         f"backticks at the start of the line, then `{tag}`")
+    starts = [n for n, line in enumerate(lines) if line.rstrip() == fence]
+    if not starts:
+        return None
+    if len(starts) > 1:
+        raise ValueError(f"it holds more than one `{tag}` block")
+    # ponytail: counting fence lines, so an unclosed inner fence can fool it; a second block is
+    # still refused and the owner reads the frozen list, so it can mis-signal but not widen.
+    if sum(line.lstrip().startswith(FENCE_MARKS) for line in lines[:starts[0]]) % 2:
+        raise ValueError(f"its `{tag}` block sits inside another code fence")
+    body = []
+    for line in lines[starts[0] + 1:]:
+        if line.rstrip() == "```":
+            return body
+        body.append(line)
+    raise ValueError(f"its `{tag}` block is not closed with ```")
 
 
 def parse_scope(text: str) -> list[str] | None:
     """The patterns of the plan's one `sdlc-scope` block; None when it has none; ValueError when it
     is malformed or when what the gate would freeze could differ from what the owner reads, so
     approval is refused while a person is watching, not at edit time."""
-    lines = text.split("\n")
-    if any(opens_scope_fence(line) and line.rstrip() != SCOPE_FENCE for line in lines):
-        raise ValueError("a line opens a code fence for `sdlc-scope` but is not the exact fence: three "
-                         "backticks at the start of the line, then `sdlc-scope`")
-    starts = [n for n, line in enumerate(lines) if line.rstrip() == SCOPE_FENCE]
-    if not starts:
+    body = fenced_block(text, SCOPE_BLOCK)
+    if body is None:
         return None
-    if len(starts) > 1:
-        raise ValueError("it holds more than one `sdlc-scope` block")
-    # ponytail: counting fence lines, so an unclosed inner fence can fool it; a second block is
-    # still refused and the owner reads the frozen list, so it can mis-signal but not widen.
-    if sum(line.lstrip().startswith(FENCE_MARKS) for line in lines[:starts[0]]) % 2:
-        raise ValueError("its `sdlc-scope` block sits inside another code fence")
-    body = []
-    for line in lines[starts[0] + 1:]:
-        if line.rstrip() == "```":
-            break
-        body.append(line)
-    else:
-        raise ValueError("its `sdlc-scope` block is not closed with ```")
     if len("\n".join(body).encode()) > SCOPE_MAX_BYTES:
         raise ValueError(f"its `sdlc-scope` block is longer than {SCOPE_MAX_BYTES} bytes")
     entries = [line.strip() for line in body]
@@ -358,7 +366,7 @@ def parse_scope(text: str) -> list[str] | None:
 
 def has_scope_block(text: str) -> bool:
     """Whether the plan holds a scope block or a fence that looks like one (parse_scope refuses it)."""
-    return any(opens_scope_fence(line) for line in text.split("\n"))
+    return any(opens_fence(line, SCOPE_BLOCK) for line in text.split("\n"))
 
 
 def choose_plan(root: Path, plans: dict[str, str], slug: str | None) -> tuple[str | None, str]:
