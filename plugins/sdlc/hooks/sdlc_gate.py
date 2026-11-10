@@ -10,7 +10,16 @@ and only matching files may be edited. A reply of exactly `sdlc off` releases th
 approved plan.md changed or a new one appeared, an edit outside the frozen scope, a `fix:`
 commit without an `Evidence:` line (a message it cannot read is judged on the command text),
 a Bash command that writes from a read-only review agent or while the session is locked, and a Bash
-command that writes to the gate's state.
+command that writes to the gate's state. A plan can also hold an `sdlc-tests` block, the exact paths of a
+fix's reproduction tests: the approval freezes them, and afterwards only `qa-engineer` may edit one
+with a file tool; the main session and every other agent are denied, also through a symlinked folder
+or another case of the name. SDLC_GATE_SCOPE=off does not turn this off.
+ponytail: the freeze covers the four file tools only. A Bash write, a script, a formatter, or an edit
+of a file the test depends on (a fixture, conftest, test config) still changes what the test proves;
+`qa-engineer` may edit a frozen test at any time, so a weakening can be routed through it; another
+plugin's agent named `qa-engineer` passes; and the gate cannot see that the test ever failed. /sdlc
+has Verify recompute each frozen file's hash against the one recorded after the red run, which finds
+these after the fact; an OS sandbox would prevent them.
 `precompact` (PreCompact) and `compacted` (SessionStart, matcher `compact`): in a session with a lock or
 an approval, the first prints what the compaction summary should keep, and the second puts the gate's
 state and each open run's status.md back into the context, as fenced data. Neither changes state, and
@@ -137,6 +146,8 @@ UNLOCK_WORDS = ("exactly `approve plan` (with more than one plan.md, add the pla
 SCOPE_BLOCK = "sdlc-scope"
 SCOPE_MAX_ENTRIES, SCOPE_MAX_ENTRY, SCOPE_MAX_BYTES, SCOPE_MAX_PARTS = 100, 200, 8192, 100
 SCOPE_TAG = "sdlc-gate: [scope] "
+TESTS_BLOCK, TESTS_MAX_ENTRIES, TESTS_WRITER = "sdlc-tests", 20, "qa-engineer"
+TESTS_TAG = "sdlc-gate: [tests] "
 FENCE_MARKS = ("```", "~~~")
 PATH_KEYS = ("file_path", "notebook_path")
 # An approved scope never covers these, wherever they sit in the tree: they hold the hooks, the
@@ -364,9 +375,51 @@ def parse_scope(text: str) -> list[str] | None:
     return globs
 
 
+def frozen_key(path: str) -> str:
+    """One spelling for a frozen test's path. Always case-folded: a mount can ignore case on any platform,
+    and treating two names that differ only in case as one file only denies more."""
+    return unicodedata.normalize("NFC", path).casefold()
+
+
+def check_test_path(path: str, root: Path) -> None:
+    if any(char in path for char in "*?["):
+        raise ValueError(f"`{path}` has a wildcard; a line of `{TESTS_BLOCK}` is one exact file")
+    check_glob(path)
+    if frozen_key(path.split("/")[0]) == ".sdlc":
+        raise ValueError(f"`{path}` is under .sdlc/, which holds the run's own files")
+    if (root / path).is_dir():
+        raise ValueError(f"`{path}` is a folder; a line of `{TESTS_BLOCK}` is one exact file")
+
+
+def parse_tests(text: str, root: Path, globs: list[str] | None) -> list[str] | None:
+    """The exact paths of the plan's one `sdlc-tests` block; None when it has none; ValueError when it is
+    malformed, or names a file the approved scope would not let anyone write."""
+    body = fenced_block(text, TESTS_BLOCK)
+    if body is None:
+        return None
+    entries = [line.strip() for line in body]
+    paths = [unicodedata.normalize("NFC", entry) for entry in entries if entry and not entry.startswith("#")]
+    if not paths:
+        raise ValueError(f"its `{TESTS_BLOCK}` block is empty")
+    if len(paths) > TESTS_MAX_ENTRIES:
+        raise ValueError(f"its `{TESTS_BLOCK}` block has more than {TESTS_MAX_ENTRIES} paths")
+    if len({frozen_key(path) for path in paths}) != len(paths):
+        raise ValueError(f"its `{TESTS_BLOCK}` block names a file twice")
+    for path in paths:
+        check_test_path(path, root)
+        if globs is not None and not any(glob_match(glob, path) for glob in globs):
+            raise ValueError(f"`{path}` is in `{TESTS_BLOCK}` but outside the `{SCOPE_BLOCK}` block, so nobody "
+                             "could write it")
+    return paths
+
+
 def has_scope_block(text: str) -> bool:
     """Whether the plan holds a scope block or a fence that looks like one (parse_scope refuses it)."""
     return any(opens_fence(line, SCOPE_BLOCK) for line in text.split("\n"))
+
+
+def has_tests_block(text: str) -> bool:
+    return any(opens_fence(line, TESTS_BLOCK) for line in text.split("\n"))
 
 
 def choose_plan(root: Path, plans: dict[str, str], slug: str | None) -> tuple[str | None, str]:
@@ -379,8 +432,11 @@ def choose_plan(root: Path, plans: dict[str, str], slug: str | None) -> tuple[st
         return (target, "") if target in plans else (None, f"no plan named `{slug}`; the plans are {', '.join(names)}.")
     if len(names) == 1:
         return names[0], ""
-    if any(has_scope_block((root / name).read_text(encoding="utf-8", errors="replace")) for name in names):
-        return None, (f"more than one plan.md exists ({', '.join(names)}) and one holds a scope block. The owner "
+    texts = [(root / name).read_text(encoding="utf-8", errors="replace") for name in names]
+    kind = ("scope" if any(has_scope_block(text) for text in texts)
+            else "tests" if any(has_tests_block(text) for text in texts) else "")
+    if kind:
+        return None, (f"more than one plan.md exists ({', '.join(names)}) and one holds a {kind} block. The owner "
                       "replies `approve plan <folder>` with the folder name under .sdlc/ of the plan they approve.")
     return None, ""
 
@@ -388,6 +444,32 @@ def choose_plan(root: Path, plans: dict[str, str], slug: str | None) -> tuple[st
 def refuse(why: str) -> None:
     emit("UserPromptSubmit", system_message=f"sdlc-gate: {why}",
          additionalContext=f"sdlc-gate: {why} Code edits stay locked.")
+
+
+def previous_tests(approved: Path) -> list[str]:
+    """The frozen paths of the approval this one replaces, for the notice only: unreadable counts as none."""
+    try:
+        paths = json.loads(approved.read_text())["tests"]["paths"]
+        return [path for path in paths if isinstance(path, str)]
+    except Exception:
+        return []
+
+
+def tests_notice(before: list[str], tests: list[str] | None) -> str:
+    """What the approval notice adds about frozen tests: "" when neither approval has any, so a plan
+    with no `sdlc-tests` block reads as it always did. A path that left the list is named, because the
+    owner's `approve plan` is the only thing between an edited plan.md and an unfrozen test."""
+    now_frozen = tests or []
+    removed = sorted(set(before) - set(now_frozen))
+    added = sorted(set(now_frozen) - set(before)) if before else []
+    parts = []
+    if now_frozen:
+        parts.append(f"Frozen tests, which only {TESTS_WRITER} may edit: {', '.join(now_frozen)}.")
+    if removed:
+        parts.append(f"NO LONGER FROZEN since the last approval: {', '.join(removed)}.")
+    if added:
+        parts.append(f"Newly frozen since the last approval: {', '.join(added)}.")
+    return "".join(f" {part}" for part in parts)
 
 
 def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None = None) -> None:
@@ -398,26 +480,33 @@ def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None 
             "sdlc-gate: no .sdlc/*/plan.md exists yet, so there is no plan to approve and code "
             "edits stay locked. Save plan.md, then ask the owner again."))
         return
-    target, globs = None, None
+    target, globs, tests = None, None, None
     try:
         target, why = choose_plan(root, plans, slug)
         if why:
             return refuse(why)
         if target:
             raw = (root / target).read_bytes()
-            globs = parse_scope(raw.decode("utf-8", errors="replace"))
+            plan_text = raw.decode("utf-8", errors="replace")
+            globs = parse_scope(plan_text)
+            tests = parse_tests(plan_text, root, globs)
             plans[target] = hashlib.sha256(raw).hexdigest()
     except (OSError, ValueError) as exc:
         return refuse(f"{target or 'a plan.md'} cannot be approved: {exc}. Fix the plan, then ask the owner again.")
     record = {"at": now(), "plans": plans}
     if globs is not None:
         record["scope"] = {"plan": target, "globs": globs}
+    if tests is not None:
+        record["tests"] = {"plan": target, "paths": tests}
+    frozen = tests_notice(previous_tests(approved), tests)
     line = log_event(data, "approve", text)  # logged before the approval takes effect: a log error leaves the lock on
     log_event(data, "scope", f"{target or 'all plans'} scope={'none' if globs is None else len(globs)}")
+    if tests is not None:
+        log_event(data, "tests", f"{target} tests={len(tests)}")
     approved.write_text(json.dumps(record))
     lock.unlink(missing_ok=True)
     limit = ("No `sdlc-scope` block was approved, so edits are not limited to a set of paths." if globs is None
-             else f"Edits are limited to {len(globs)} pattern(s) from {target}: {', '.join(globs)}.")
+             else f"Edits are limited to {len(globs)} pattern(s) from {target}: {', '.join(globs)}.") + frozen
     emit("UserPromptSubmit", system_message=f"sdlc-gate: plan approved. {limit}", additionalContext=(
         f"sdlc-gate: plan approval recorded: {line}. Bound to: {', '.join(plans)}. {limit} Copy this line "
         "into status.md. A change to any of these plan.md files locks code edits again."))
@@ -510,12 +599,66 @@ def protected(relative: str) -> bool:
     return any(part in PROTECTED_NAMES for part in relative.split("/"))
 
 
-def written_inside_project(data: dict, file_path: str) -> bool:
-    """Whether the path, as written and before symlinks are followed, lies in the project, by either
-    spelling of its root."""
+def written_relative(data: dict, file_path: str) -> str | None:
+    """The path as written, before symlinks are followed, relative to the project by either spelling of
+    its root; None when it is not written inside the project."""
     base = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or "."
     written = os.path.abspath(file_path)
-    return any(os.path.commonpath([written, root]) == root for root in (os.path.abspath(base), os.path.realpath(base)))
+    for root in (os.path.abspath(base), os.path.realpath(base)):
+        if os.path.commonpath([written, root]) == root:
+            return Path(os.path.relpath(written, root)).as_posix()
+    return None
+
+
+def agent_name(data: dict) -> str:
+    """The calling agent without its plugin prefix (`sdlc:qa-engineer` and `my-agents:qa-engineer` are one
+    role); "" for the main session. ponytail: another plugin's agent of the same name is the same role."""
+    return str(data.get("agent_type") or "").split(":")[-1]
+
+
+def approved_tests(data: dict) -> list[str] | None:
+    """The frozen test paths of this session's approval; None when it holds none."""
+    approved = session_file(data, "approved")
+    if approved is None or not approved.exists():
+        return None
+    tests = json.loads(approved.read_text()).get("tests")
+    if tests is None:
+        return None
+    paths = tests["paths"]
+    if not isinstance(paths, list) or not paths or not all(isinstance(path, str) for path in paths):
+        raise ValueError("the frozen tests in the gate's record are not a list of paths")
+    return paths
+
+
+def frozen_keys(root: Path, paths: list[str]) -> set[str]:
+    """Each frozen path as the plan spells it and as it resolves, so an edit through a symlinked folder,
+    or of the file a frozen symlink points at, is the same file."""
+    keys = {frozen_key(path) for path in paths}
+    for path in paths:
+        resolved = os.path.realpath(root / path)
+        if os.path.commonpath([resolved, str(root)]) == str(root):
+            keys.add(frozen_key(Path(os.path.relpath(resolved, root)).as_posix()))
+    return keys
+
+
+def frozen_reason(data: dict, spellings: list[str | None]) -> str:
+    """The reason to deny an edit of a frozen reproduction test by anyone but qa-engineer, or "". The
+    record is read before the caller is, and like the scope it denies when it cannot decide."""
+    try:
+        paths = approved_tests(data)
+        if paths is None:
+            return ""
+        frozen = frozen_keys(project_root(data), paths)
+        hit = next((spelling for spelling in spellings if spelling and frozen_key(spelling) in frozen), None)
+    except Exception as exc:
+        return (f"{TESTS_TAG}the frozen-tests check failed ({type(exc).__name__}: {exc}), so this edit is not "
+                "allowed. Tell the owner, who can reply `sdlc off` to release the session.")
+    if hit is None or agent_name(data) == TESTS_WRITER:
+        return ""
+    return (f"{TESTS_TAG}{hit} is a frozen reproduction test of the approved plan, and only {TESTS_WRITER} may "
+            f"edit it; this call came from {agent_name(data) or 'the main session'}. If the test is wrong, report "
+            f"it and leave it: changing it needs an amended plan.md and the owner's `approve plan`. If you are "
+            f"{TESTS_WRITER}, the host did not send your agent type: tell the owner, who can reply `sdlc off`.")
 
 
 def file_edit_reason(data: dict, file_path: str) -> str:
@@ -525,12 +668,14 @@ def file_edit_reason(data: dict, file_path: str) -> str:
     target, root, state = canonical(file_path), canonical(project_root(data)), canonical(state_dir())
     if os.path.commonpath([target, state]) == state:
         return "sdlc-gate: the gate's state belongs to the owner; do not edit it."
+    written = written_relative(data, file_path)
     if os.path.commonpath([target, root]) != root:
-        return scope_reason(data, None) if written_inside_project(data, file_path) else ""
+        return (scope_reason(data, None) or frozen_reason(data, [written])) if written is not None else ""
     relative = Path(target).relative_to(root)
     if relative.parts[:1] == (".sdlc",):
         return ""
-    return lock_reason(data, project_root(data)) or scope_reason(data, relative.as_posix())
+    return (lock_reason(data, project_root(data)) or scope_reason(data, relative.as_posix())
+            or frozen_reason(data, [relative.as_posix(), written]))
 
 
 def session_gated(data: dict) -> bool:
@@ -728,7 +873,7 @@ def write_reason(data: dict, command: str) -> str:
 
 
 def bash_reason(data: dict, command: str) -> str:
-    agent = str(data.get("agent_type", "")).split(":")[-1]
+    agent = agent_name(data)
     read_only = agent in READ_ONLY_AGENTS
     if not read_only:
         return commit_reason(command, str(data.get("cwd", ""))) or write_reason(data, command)
@@ -745,10 +890,10 @@ def deny(reason: str) -> None:
     emit("PreToolUse", permissionDecision="deny", permissionDecisionReason=reason)
 
 
-def note_scope_denial(data: dict, path: str) -> None:
-    """Log a scope denial after it was emitted, so a failed write cannot drop the denial."""
+def note_denial(data: dict, kind: str, path: str) -> None:
+    """Log a scope or frozen-test denial after it was emitted, so a failed write cannot drop the denial."""
     try:
-        log_event(data, "deny-scope", path)
+        log_event(data, kind, path)
     except Exception:  # best effort: the denial is already printed
         pass
 
@@ -763,7 +908,9 @@ def on_tool(data: dict) -> None:
     if reason:
         deny(reason)
         if reason.startswith(SCOPE_TAG):
-            note_scope_denial(data, str(path))
+            note_denial(data, "deny-scope", str(path))
+        elif reason.startswith(TESTS_TAG):
+            note_denial(data, "deny-tests", f"agent={agent_name(data) or 'main'} {path}")
 
 
 def readable_statuses(root: Path) -> list[Path]:
