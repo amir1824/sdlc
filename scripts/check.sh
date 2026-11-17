@@ -39,6 +39,11 @@ case "$wired" in
   *) hooks=PARTIAL; drift=$((drift + 1)) ;;
 esac
 printf '%-8s %s\n' "$hooks" "settings.json hooks (prompt and tool) -> plugins/sdlc/hooks/sdlc_gate.py"
+# the mcp mode keeps Atlassian writes out of a Jira run; not counted as drift, since a plugin install has it in hooks.json
+if grep -qF -e "$gate mcp" -e "$gate\\\" mcp" "$dest/settings.json" 2>/dev/null; then mcp=linked; else mcp=missing; fi
+printf '%-8s %s\n' "$mcp" "settings.json mcp gate (no MCP write in a Jira run) -> plugins/sdlc/hooks/sdlc_gate.py mcp"
+if grep -qF -e "$gate jira-seen" -e "$gate\\\" jira-seen" "$dest/settings.json" 2>/dev/null; then seen=linked; else seen=missing; fi
+printf '%-8s %s\n' "$seen" "settings.json jira-seen (a Jira run cannot be approved without it) -> plugins/sdlc/hooks/sdlc_gate.py jira-seen"
 
 version_of() { sed -n 's/.*"version": "\(.*\)".*/\1/p' "$1" | head -1; }
 plugin_version="$(version_of "$repo/plugins/sdlc/.claude-plugin/plugin.json")"

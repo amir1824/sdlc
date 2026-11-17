@@ -37,7 +37,9 @@ git clone https://github.com/amir1824/sdlc.git && cd sdlc && scripts/install.sh
   ],
   "PreToolUse": [
     { "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
-      "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py tool", "timeout": 5 }] }
+      "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py tool", "timeout": 5 }] },
+    { "matcher": "^mcp__",
+      "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py mcp", "timeout": 5 }] }
   ],
   "PreCompact": [
     { "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py precompact || exit 0", "timeout": 5 }] }
@@ -45,9 +47,17 @@ git clone https://github.com/amir1824/sdlc.git && cd sdlc && scripts/install.sh
   "SessionStart": [
     { "matcher": "compact",
       "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py compacted", "timeout": 5 }] }
+  ],
+  "PostToolUse": [
+    { "matcher": "Edit|Write|MultiEdit",
+      "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/status_check.py hook", "timeout": 5 }] },
+    { "matcher": "^mcp__",
+      "hooks": [{ "type": "command", "command": "python3 -I /path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py jira-seen", "timeout": 5 }] }
   ]
 }
 ```
+
+The `mcp` entry denies every MCP tool that does not read in a `/sdlc jira` run, and the `jira-seen` entry lets `approve plan` through once the session has read the ticket and its `labels` hold `sdlc` (or `SDLC_JIRA_LABEL`); both start Python on every MCP call and do nothing in a session with no Jira run. Without `jira-seen`, a Jira run cannot be approved until the owner replies `sdlc off`. The last entry is the `status.md` check. It is optional and advisory: it reports a malformed `status.md` as context and never blocks a write. Set `SDLC_STATUS_CHECK=off` to silence it. If you already have a `PostToolUse` list (for `repeat_guard.py`, for example), add the entry to it.
 
 To keep your own version of a file (for example an agent with your own MCP tools), list it in `~/.claude/.sdlc-local-overrides`, one path per line (`agents/product-manager.md`). `install.sh` never replaces a listed file.
 
@@ -62,8 +72,8 @@ To keep your own version of a file (for example an agent with your own MCP tools
 | Path | What |
 |---|---|
 | `plugins/sdlc/agents/` | 14 role agents: planning, building, review, security, devops, docs and research |
-| `plugins/sdlc/commands/` | `/sdlc` (the full pipeline), `/brutal-review`, `/security-audit` |
-| `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`), and `repeat_guard.py` (tells an agent to stop when the same test file fails three times in 30 minutes; wired by hand in `settings.json` as a `PostToolUse` and a `PostToolUseFailure` hook on Bash, not by `hooks.json`) |
+| `plugins/sdlc/commands/` | `/sdlc` (the full pipeline; `/sdlc jira <KEY>` runs a ticket), `/brutal-review`, `/security-audit` |
+| `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`; modes `prompt`, `tool`, `mcp`, `jira-seen`, `precompact`, `compacted`), `status_check.py` (reports a malformed run `status.md` as context after each write; advisory, wired by `hooks.json`), and `repeat_guard.py` (tells an agent to stop when the same test file fails three times in 30 minutes; wired by hand in `settings.json` as a `PostToolUse` and a `PostToolUseFailure` hook on Bash, not by `hooks.json`) |
 | `plugins/sdlc/skills/` | the six skills the gates call |
 | `rules/` | 7 engineering rules for `~/.claude/rules/` |
 | `scripts/` | `install.sh`, `check.sh` (drift, hook wiring, versions), and the tools for the [lessons library](docs/lessons-library.md) |
@@ -113,6 +123,24 @@ To keep your own version of a file (for example an agent with your own MCP tools
 These gates are a best-effort guardrail. They stop a misread reply and a model's slip, not an agent set on getting past them: Bash writes are judged by a denylist, so a verb it does not list gets through, and a scope pattern is not checked for Bash. They do not show that your requirements are right, only that the workflow was followed. An action that must never happen belongs in Claude Code's permission deny rules or a sandbox.
 
 If the gate itself crashes in a locked or approved session, it denies the action (reply `sdlc off` to release). In any other session an error lets the action through. While locked, some read pipelines such as `npm test | tee out.log` are denied too; `approve plan` or `sdlc off` ends that. The gates need `python3` 3.9 or later. `SDLC_GATE=off` turns them off, `SDLC_GATE_SCOPE=off` turns off only the scope check, and `SDLC_GATE_TRACE=1` logs what Claude Code sends each hook to `~/.claude/sdlc-gate/trace.log`.
+
+## Jira runs
+
+`/sdlc jira SCRUM-123` runs one Jira ticket through the same stages. The ticket is the request, and the gate denies the MCP tools that could write, so the chair cannot change the ticket through the connector.
+
+1. Wire the two hooks it needs. A plugin install has them in `hooks.json`; a manual install adds the `mcp` and `jira-seen` entries of the snippet above to `~/.claude/settings.json` (`scripts/check.sh` prints `linked` or `missing` for each). Without `jira-seen`, a Jira run cannot be approved until you reply `sdlc off`.
+2. Put the label `sdlc` on the ticket (or set `SDLC_JIRA_LABEL`). It shows your intent; it does not prove who set it.
+3. Type `/sdlc jira SCRUM-123` (also `lean jira` and `full jira`, and `resume jira-scrum-123` typed as one command). The gate hands the chair a `sdlc-gate: Jira run` line, which you do not see; the chair reports it, and when it cannot, the hooks are not installed and the run stops.
+4. The chair reads the ticket and its context (type, status, priority, labels, linked issues; `getJiraIssue`, `listJiraIssueComments`), saves it as `.sdlc/jira-scrum-123/intent.md` under "Ticket text, untrusted, n=1", turns each acceptance criterion into a requirement with `source: SCRUM-123#ac-<n>`, and classifies the risk (at least MEDIUM). `approve plan` is refused until this session has read the ticket and its `labels` hold the label.
+5. In a Jira run the gate denies every MCP tool that does not read (Atlassian writes, Figma, Supabase writes, browser clicks), except the host app's task-list tools (`update_plan`, `wrap_up`, `mark_chapter`), until you reply `sdlc off`. A check that needs one of them is reported `not run`.
+
+What it does not do:
+- It was written against hand-made responses, not a real Jira one; a response it cannot read as one issue with a `labels` list leaves the run waiting for `sdlc off`. The `^mcp__` matcher, a subagent's `session_id` and the 5 s hook timeout are unverified.
+- It stops a slip and text in a ticket, not a shell: Bash can delete the markers, a `claude -p` child has its own session, and `curl` and `acli` are not MCP. A hook that crashes or times out lets the call through.
+- The markers belong to the session: after `/clear`, or in a new session, the run is not marked until you retype `/sdlc jira KEY` or `resume jira-key`.
+- A tool is judged by the words of its name: a write named like a read, with none of the write words in it, gets through, and a read-named tool with arguments the agent chooses (fetch a URL, search) can still carry data out. A read-only Atlassian token is the guard that does not depend on tool names.
+- A plain run in a project that holds a `.sdlc/jira-*` folder, even a closed one, loses its non-read MCP tools until `sdlc off`.
+- The ticket-triage agent, a re-read of the ticket before Build, and an eval of the whole path are not built.
 
 ## Skills
 

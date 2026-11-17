@@ -21,11 +21,20 @@ class HookWiringTest(unittest.TestCase):
         self.home = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.home)
 
-    def hooks_line(self, settings):
+    def settings_line(self, settings, label):
         (self.home / "settings.json").write_text(settings)
         out = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=30,
                              env={**os.environ, "CLAUDE_HOME": str(self.home)})
-        return next(line for line in out.stdout.splitlines() if "settings.json hooks" in line)
+        return next(line for line in out.stdout.splitlines() if label in line)
+
+    def hooks_line(self, settings):
+        return self.settings_line(settings, "settings.json hooks")
+
+    def mcp_line(self, settings):
+        return self.settings_line(settings, "settings.json mcp gate")
+
+    def seen_line(self, settings):
+        return self.settings_line(settings, "settings.json jira-seen")
 
     def test_both_events_are_linked(self):
         line = self.hooks_line(f'{{"a": "python3 -I {GATE} prompt", "b": "python3 -I {GATE} tool"}}')
@@ -42,6 +51,30 @@ class HookWiringTest(unittest.TestCase):
     def test_no_events_is_missing(self):
         line = self.hooks_line("{}")
         self.assertTrue(line.startswith("missing"), line)
+
+    def test_the_mcp_mode_is_linked_when_wired(self):
+        line = self.mcp_line(f'{{"a": "python3 -I {GATE} mcp"}}')
+        self.assertTrue(line.startswith("linked"), line)
+
+    def test_the_mcp_mode_with_a_quoted_path_is_linked(self):
+        line = self.mcp_line(f'{{"a": "python3 -I \\"{GATE}\\" mcp"}}')
+        self.assertTrue(line.startswith("linked"), line)
+
+    def test_the_mcp_mode_is_missing_when_only_prompt_and_tool_are_wired(self):
+        line = self.mcp_line(f'{{"a": "python3 -I {GATE} prompt", "b": "python3 -I {GATE} tool"}}')
+        self.assertTrue(line.startswith("missing"), line)
+
+    def test_jira_seen_is_linked_when_wired(self):
+        line = self.seen_line(f'{{"a": "python3 -I {GATE} jira-seen"}}')
+        self.assertTrue(line.startswith("linked"), line)
+
+    def test_jira_seen_is_missing_when_only_the_mcp_mode_is_wired(self):
+        line = self.seen_line(f'{{"a": "python3 -I {GATE} mcp"}}')
+        self.assertTrue(line.startswith("missing"), line)
+
+    def test_a_missing_mcp_mode_does_not_turn_linked_prompt_and_tool_into_partial(self):
+        line = self.hooks_line(f'{{"a": "python3 -I {GATE} prompt", "b": "python3 -I {GATE} tool"}}')
+        self.assertTrue(line.startswith("linked"), line)
 
 
 if __name__ == "__main__":

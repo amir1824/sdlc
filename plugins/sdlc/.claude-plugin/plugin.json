@@ -1,6 +1,6 @@
 {
   "name": "sdlc",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A risk-tiered SDLC for Claude Code: 14 role agents (plan, build, verify, ship), the /sdlc, /brutal-review and /security-audit commands, six gate skills, and gate hooks that hold the plan approval.",
   "author": {
     "name": "AmirBenShimol"

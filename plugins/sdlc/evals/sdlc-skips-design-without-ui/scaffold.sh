@@ -20,7 +20,13 @@ cat > .sdlc/slugify/metrics.md <<'MD'
 # Metrics
 Primary: share of call sites using slugify instead of hand-built slugs. Guardrail: no existing function changes behavior. Readout date: 2026-12-01.
 MD
-cat > .sdlc/slugify/status.md <<'MD'
+{
+  cat <<'MD'
+run: slugify
+risk: MEDIUM
+path: full
+base: 4b825dc642cb6eb9a060e54bf8d69288fbee4904
 1 Discover: done
-2 Define: done, scope approved by the owner
+2 Define: done
 MD
+} > .sdlc/slugify/status.md

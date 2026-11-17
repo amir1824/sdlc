@@ -54,10 +54,13 @@ class TextTest(unittest.TestCase):
     def test_title_case_unchanged(self):
         self.assertEqual(title_case("hello world"), "Hello World")
 PY
-cat > .sdlc/slugify/status.md <<'MD'
+{
+  printf 'run: slugify\nrisk: MEDIUM\npath: full\nbase: 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nplan-sha: %s\n' "$(shasum -a 256 .sdlc/slugify/plan.md | cut -d ' ' -f 1)"
+  cat <<'MD'
 1 Discover: done
-2 Define: done, scope approved
-3 Design: skipped, no UI
-4 Plan: done, plan approved
-5 Build: in progress
+2 Define: done
+3 Design: skipped - no UI
+4 Plan: done
+5 Build: running
 MD
+} > .sdlc/slugify/status.md

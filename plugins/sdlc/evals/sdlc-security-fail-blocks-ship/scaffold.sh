@@ -69,10 +69,13 @@ cat > .sdlc/slugify/build.md <<'MD'
 # Build
 backend-developer added slugify and a small convenience helper export_slug(slug, folder) that appends a slug to folder/slugs.txt. Added test_text.py. `python3 -m unittest test_text`: 2 tests OK.
 MD
-cat > .sdlc/slugify/status.md <<'MD'
+{
+  printf 'run: slugify\nrisk: MEDIUM\npath: full\nbase: 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nplan-sha: %s\n' "$(shasum -a 256 .sdlc/slugify/plan.md | cut -d ' ' -f 1)"
+  cat <<'MD'
 1 Discover: done
-2 Define: done, scope approved
-3 Design: skipped, no UI
-4 Plan: done, plan approved
-5 Build: done, see build.md
+2 Define: done
+3 Design: skipped - no UI
+4 Plan: done
+5 Build: done - see build.md
 MD
+} > .sdlc/slugify/status.md

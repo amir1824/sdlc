@@ -361,6 +361,12 @@ class WordingTest(unittest.TestCase):
         self.assertIn("open the plan with `Based on:` the sha256 of `prd.md` and of `design-spec.md`", TECH_LEAD.read_text(encoding="utf-8"))
         self.assertIn("- **Cite, do not copy.**", TECH_LEAD.read_text(encoding="utf-8"))
 
+    def test_every_handoff_file_but_the_plan_has_a_summary(self):
+        text = SDLC.read_text(encoding="utf-8")
+        self.assertIn("holds a `## Summary` of 3 to 5 bullets", text)
+        self.assertIn("A bullet cites IDs (R1, D2, A3) and does not restate a decision.", text)
+        self.assertIn("and the file's own opening rules do not change. `plan.md` has none: its STOP summary is what the owner skims", text)
+
     def test_planning_stops_for_a_material_finding_only(self):
         section = self.planning_section()
         self.assertIn("change a decision, break a requirement or a **Must not happen** line, or leave a task in the breakdown unbuildable", section)
