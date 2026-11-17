@@ -63,7 +63,7 @@ To keep your own version of a file (for example an agent with your own MCP tools
 |---|---|
 | `plugins/sdlc/agents/` | 14 role agents: planning, building, review, security, devops, docs and research |
 | `plugins/sdlc/commands/` | `/sdlc` (the full pipeline), `/brutal-review`, `/security-audit` |
-| `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`) |
+| `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`), and `repeat_guard.py` (tells an agent to stop when the same test file fails three times in 30 minutes; wired by hand in `settings.json` as a `PostToolUse` and a `PostToolUseFailure` hook on Bash, not by `hooks.json`) |
 | `plugins/sdlc/skills/` | the six skills the gates call |
 | `rules/` | 7 engineering rules for `~/.claude/rules/` |
 | `scripts/` | `install.sh`, `check.sh` (drift, hook wiring, versions), and the tools for the [lessons library](docs/lessons-library.md) |
