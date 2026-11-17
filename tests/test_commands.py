@@ -29,8 +29,10 @@ FINGERPRINT = re.compile(r"### Fingerprint.*?```sh\n(.*?)\n```", re.DOTALL)
 
 
 def files_with_hebrew():
-    paths = [p for p in REPO.rglob("*") if p.is_file() and p.suffix in (".md", ".py", ".json", ".sh", ".drawio") and ".git" not in p.parts]
-    return [str(p.relative_to(REPO)) for p in sorted(paths) if re.search(r"[\u0590-\u05FF]", p.read_text(encoding="utf-8"))]
+    listed = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                            cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()
+    paths = [REPO / name for name in listed if Path(name).suffix in (".md", ".py", ".json", ".sh", ".drawio")]
+    return [str(p.relative_to(REPO)) for p in sorted(paths) if p.is_file() and re.search(r"[\u0590-\u05FF]", p.read_text(encoding="utf-8"))]
 
 
 def files_with_old_limit():

@@ -15,8 +15,10 @@ set -uo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 failed=""
 evals=""
+unit_args=("$@")
 if [ "${1:-}" = "--evals" ]; then
   evals=yes
+  unit_args=() # the remaining arguments belong to the eval run
   shift
 fi
 
@@ -24,11 +26,7 @@ echo "== check.sh"
 SDLC_EVALS="${SDLC_EVALS:-$repo/plugins/sdlc/evals}" bash "$repo/scripts/check.sh" || failed="check.sh"
 
 echo "== unit tests"
-if [ -n "$evals" ]; then
-  (cd "$repo" && python3 -I -m unittest discover -s tests) || failed="${failed:+$failed, }unit tests"
-else
-  (cd "$repo" && python3 -I -m unittest discover -s tests "$@") || failed="${failed:+$failed, }unit tests"
-fi
+(cd "$repo" && python3 -I -m unittest discover -s tests ${unit_args[@]+"${unit_args[@]}"}) || failed="${failed:+$failed, }unit tests"
 
 if [ -n "$evals" ] && [ -n "$failed" ]; then
   echo "verify: FAILED ($failed); the evals were not run"

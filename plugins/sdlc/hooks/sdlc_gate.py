@@ -212,11 +212,17 @@ def canonical(path: str | Path) -> str:
     return real.casefold() if CASE_INSENSITIVE_FS else real
 
 
+def plan_sources(root: Path) -> dict[str, bytes]:
+    """Each .sdlc/*/plan.md as read once: its path relative to the project, and its bytes."""
+    return {str(plan.relative_to(root)): plan.read_bytes() for plan in sorted(root.glob(".sdlc/*/plan.md"))}
+
+
+def hash_sources(sources: dict[str, bytes]) -> dict[str, str]:
+    return {name: hashlib.sha256(raw).hexdigest() for name, raw in sources.items()}
+
+
 def plan_hashes(root: Path) -> dict[str, str]:
-    return {
-        str(plan.relative_to(root)): hashlib.sha256(plan.read_bytes()).hexdigest()
-        for plan in sorted(root.glob(".sdlc/*/plan.md"))
-    }
+    return hash_sources(plan_sources(root))
 
 
 def now() -> str:
@@ -427,24 +433,24 @@ def parse_tests(text: str, root: Path, globs: list[str] | None) -> list[str] | N
     return paths
 
 
-def has_block(text: str, tag: str) -> bool:
-    """Whether the plan holds a block with this tag or a fence that looks like one (fenced_block refuses it)."""
-    return any(opens_fence(line, tag) for line in text.split("\n"))
+def has_block(lines: list[str], tag: str) -> bool:
+    """Whether the plan's lines hold a block with this tag or a fence that looks like one (fenced_block refuses it)."""
+    return any(opens_fence(line, tag) for line in lines)
 
 
-def choose_plan(root: Path, plans: dict[str, str], slug: str | None) -> tuple[str | None, str]:
+def choose_plan(sources: dict[str, bytes], slug: str | None) -> tuple[str | None, str]:
     """(the plan to approve, "") or (None, why not). With several plan.md files and no scope block in
     any, the choice decides nothing and no name is needed: (None, ""). Once one holds a block the owner
     names the plan, because the choice decides which paths may be edited."""
-    names = sorted(plans)
+    names = sorted(sources)
     if slug:
         target = f".sdlc/{slug}/plan.md"
-        return (target, "") if target in plans else (None, f"no plan named `{slug}`; the plans are {', '.join(names)}.")
+        return (target, "") if target in sources else (None, f"no plan named `{slug}`; the plans are {', '.join(names)}.")
     if len(names) == 1:
         return names[0], ""
-    texts = [(root / name).read_text(encoding="utf-8", errors="replace") for name in names]
-    kinds = (("scope", SCOPE_BLOCK), ("tests", TESTS_BLOCK))
-    kind = next((name for name, tag in kinds if any(has_block(text, tag) for text in texts)), "")
+    plan_lines = [raw.decode("utf-8", errors="replace").split("\n") for raw in sources.values()]
+    kinds = {"scope": SCOPE_BLOCK, "tests": TESTS_BLOCK}
+    kind = next((name for name, tag in kinds.items() if any(has_block(lines, tag) for lines in plan_lines)), "")
     if kind:
         return None, (f"more than one plan.md exists ({', '.join(names)}) and one holds a {kind} block. The owner "
                       "replies `approve plan <folder>` with the folder name under .sdlc/ of the plan they approve.")
@@ -456,12 +462,11 @@ def refuse(why: str) -> None:
          additionalContext=f"sdlc-gate: {why} Code edits stay locked.")
 
 
-def plan_limits(root: Path, target: str) -> tuple[list[str] | None, list[str] | None, str]:
-    """(the scope patterns, the frozen test paths, the sha256) of the plan as it is read once."""
-    raw = (root / target).read_bytes()
+def plan_limits(root: Path, raw: bytes) -> tuple[list[str] | None, list[str] | None]:
+    """(the scope patterns, the frozen test paths) of the plan bytes the approval hashed."""
     text = raw.decode("utf-8", errors="replace")
     globs = parse_scope(text)
-    return globs, parse_tests(text, root, globs), hashlib.sha256(raw).hexdigest()
+    return globs, parse_tests(text, root, globs)
 
 
 def previous_tests(approved: Path) -> list[str]:
@@ -497,7 +502,8 @@ def tests_notice(before: list[str], tests: list[str] | None) -> str:
 
 def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None = None) -> None:
     root = project_root(data)
-    plans = plan_hashes(root)
+    sources = plan_sources(root)
+    plans = hash_sources(sources)
     if not plans:
         emit("UserPromptSubmit", additionalContext=(
             "sdlc-gate: no .sdlc/*/plan.md exists yet, so there is no plan to approve and code "
@@ -505,11 +511,11 @@ def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None 
         return
     target, globs, tests = None, None, None
     try:
-        target, why = choose_plan(root, plans, slug)
+        target, why = choose_plan(sources, slug)
         if why:
             return refuse(why)
         if target:
-            globs, tests, plans[target] = plan_limits(root, target)
+            globs, tests = plan_limits(root, sources[target])
     except (OSError, ValueError) as exc:
         return refuse(f"{target or 'a plan.md'} cannot be approved: {exc}. Fix the plan, then ask the owner again.")
     record = {"at": now(), "plans": plans}
@@ -661,27 +667,37 @@ def frozen_keys(root: Path, paths: list[str]) -> set[str]:
     return keys
 
 
-def frozen_reason(data: dict, spellings: list[str | None], fail_closed: bool = True) -> str:
+def frozen_reason(data: dict, spellings: list[str]) -> str:
     """The reason to deny an edit of a frozen reproduction test by anyone but qa-engineer, or "". The
-    record is read before the caller is, and like the scope it denies when it cannot decide, unless
-    the caller asks otherwise."""
-    try:
-        paths = approved_tests(data)
-        if paths is None:
-            return ""
-        frozen = frozen_keys(project_root(data), paths)
-        hit = next((spelling for spelling in spellings if spelling and frozen_key(spelling) in frozen), None)
-    except Exception as exc:
-        if not fail_closed:
-            return ""
-        return (f"{TESTS_TAG}the frozen-tests check failed ({type(exc).__name__}: {exc}), so this edit is not "
-                "allowed. Tell the owner, who can reply `sdlc off` to release the session.")
+    record is read before the caller is; an unreadable record raises."""
+    paths = approved_tests(data)
+    if paths is None:
+        return ""
+    frozen = frozen_keys(project_root(data), paths)
+    hit = next((spelling for spelling in spellings if frozen_key(spelling) in frozen), None)
     if hit is None or agent_name(data) == TESTS_WRITER:
         return ""
     return (f"{TESTS_TAG}{hit} is a frozen reproduction test of the approved plan, and only {TESTS_WRITER} may "
             f"edit it; this call came from {agent_name(data) or 'the main session'}. If the test is wrong, report "
             f"it and leave it: changing it needs an amended plan.md and the owner's `approve plan`. If you are "
             f"{TESTS_WRITER}, the host did not send your agent type: tell the owner, who can reply `sdlc off`.")
+
+
+def strict_frozen_reason(data: dict, spellings: list[str]) -> str:
+    """frozen_reason that, like the scope, denies when it cannot decide."""
+    try:
+        return frozen_reason(data, spellings)
+    except Exception as exc:
+        return (f"{TESTS_TAG}the frozen-tests check failed ({type(exc).__name__}: {exc}), so this edit is not "
+                "allowed. Tell the owner, who can reply `sdlc off` to release the session.")
+
+
+def lenient_frozen_reason(data: dict, spellings: list[str]) -> str:
+    """frozen_reason that allows when it cannot decide, for the run's own files."""
+    try:
+        return frozen_reason(data, spellings)
+    except Exception:
+        return ""
 
 
 def file_edit_reason(data: dict, file_path: str) -> str:
@@ -693,14 +709,15 @@ def file_edit_reason(data: dict, file_path: str) -> str:
         return "sdlc-gate: the gate's state belongs to the owner; do not edit it."
     written = written_relative(data, file_path)
     if os.path.commonpath([target, root]) != root:
-        return (scope_reason(data, None) or frozen_reason(data, [written])) if written is not None else ""
+        return (scope_reason(data, None) or strict_frozen_reason(data, [written])) if written is not None else ""
     relative = Path(target).relative_to(root)
+    spellings = [name for name in (relative.as_posix(), written) if name]
     if relative.parts[:1] == (".sdlc",):
         # A symlink made after approval can lead a frozen name here. The run's own files stay writable
         # when the record cannot be read: the chair must be able to save status.md to say so.
-        return frozen_reason(data, [relative.as_posix(), written], fail_closed=False)
+        return lenient_frozen_reason(data, spellings)
     return (lock_reason(data, project_root(data)) or scope_reason(data, relative.as_posix())
-            or frozen_reason(data, [relative.as_posix(), written]))
+            or strict_frozen_reason(data, spellings))
 
 
 def session_gated(data: dict) -> bool:
@@ -953,6 +970,12 @@ def readable_statuses(root: Path) -> list[Path]:
     return [status for _, status in sorted(found, key=lambda item: item[0], reverse=True)]
 
 
+def printable(name: str) -> str:
+    """A folder name on one line: a line break or control character in it could end the label and start
+    text outside the fence."""
+    return "".join("?" if unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp") else char for char in name)
+
+
 def open_statuses(root: Path) -> list[tuple[str, str]]:
     """(path, text) of the newest status.md files whose last line does not say the run ended."""
     shown: list[tuple[str, str]] = []
@@ -967,7 +990,7 @@ def open_statuses(root: Path) -> list[tuple[str, str]]:
             continue
         if len(text) > STATUS_HEAD_CHARS + STATUS_TAIL_CHARS:
             text = f"{text[:STATUS_HEAD_CHARS]}\n[... cut by sdlc-gate; read the file ...]\n{text[-STATUS_TAIL_CHARS:]}"
-        shown.append((status.relative_to(root).as_posix(), FENCE_IN_TEXT.sub("~~~", text)))
+        shown.append((printable(status.relative_to(root).as_posix()), FENCE_IN_TEXT.sub("~~~", text)))
     return shown
 
 

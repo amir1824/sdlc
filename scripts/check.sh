@@ -59,8 +59,8 @@ if [ -n "$evals" ] && [ -f "$evals/suites/regression.json" ] && [ -d "$evals/bas
     --baselines "$evals/baselines" --agents-dir "$evals/../agents" || drift=$((drift + 1))
 elif [ -n "$evals" ] && [ -f "$evals/suites/regression.json" ]; then
   python3 -I "$repo/scripts/suite.py" check "$evals/suites/regression.json" "$evals" || drift=$((drift + 1))
-  echo "no baselines in $evals: the frozen cases were checked, the agents were not compared with a baseline"
+  skipped=" Agent-vs-baseline comparison NOT run: no baselines in $evals, only the frozen cases were checked."
 fi
 
-echo "sdlc $plugin_version: $drift problem(s). 'missing' agents, commands and hooks are normal when the plugin is installed instead; a MISSING rule is not."
+echo "sdlc $plugin_version: $drift problem(s).${skipped:-} 'missing' agents, commands and hooks are normal when the plugin is installed instead; a MISSING rule is not."
 [ "$drift" = 0 ]
