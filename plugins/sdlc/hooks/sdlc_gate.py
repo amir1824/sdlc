@@ -68,8 +68,8 @@ MODES = {
 def handle(mode: Mode, data: dict) -> None:
     """Run the mode's handler. A crash must not open a gate the owner closed: where the mode's limit is on, it denies;
     elsewhere the error propagates and the host lets the call through.
-    ponytail: the predicate's module is imported here, so when that module is the broken one the import error
-    propagates and the call goes through. Denying when the limit cannot be read would stop every tool call of every
+    ponytail: the predicate's module and core/output.py are imported here, so when one of them is the broken one the
+    import error propagates and the call goes through. Denying when the limit cannot be read would stop every tool call of every
     project on a broken install (the hook is global, and `SDLC_GATE=off` cannot be set from inside a session). A
     check that reads the lock file with no import would close it."""
     try:

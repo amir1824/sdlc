@@ -71,6 +71,14 @@ class BrokenModuleTest(GateTest):
         self.assertEqual((done.returncode, done.stdout), (1, ""))
 
 
+    def test_a_broken_denial_module_lets_a_locked_session_through(self):
+        """The same known limit: the module that prints the denial is the one that is broken."""
+        self.locked_and_approved()
+        self.break_module("core/output.py")
+        done = self.run_copy("tool", self.edit_payload())
+        self.assertEqual((done.returncode, done.stdout), (1, ""))
+
+
 class ProjectFolderTest(GateTest):
     def plant(self, relative):
         path = self.project / relative

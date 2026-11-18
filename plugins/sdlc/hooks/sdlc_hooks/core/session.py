@@ -1,4 +1,4 @@
-"""Where the gate keeps its state, and what a session's files say: the lock, the approval, the calling agent.
+"""Where the gate keeps its state, and what a session's files say (the lock, the approval), and who is calling.
 """
 from __future__ import annotations
 
