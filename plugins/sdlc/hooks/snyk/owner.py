@@ -1,5 +1,5 @@
-"""The owner's `sdlc snyk on|off|accept|waive` words, for sdlc_gate.py: only typed words reach UserPromptSubmit, so
-these are the owner's. `host` is the SnykHost sdlc_gate.py builds; an error before the record is written leaves it
+"""The owner's `sdlc snyk on|off|accept|waive` words, for sdlc_hooks/snyk_gate.py: only typed words reach UserPromptSubmit, so
+these are the owner's. `host` is the SnykHost snyk_gate.py builds; an error before the record is written leaves it
 as it was, and the approvals log is written after it.
 """
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Recording a Snyk scan and pinning the base commit, for sdlc_gate.py. `host` is the SnykHost sdlc_gate.py builds."""
+"""Recording a Snyk scan and pinning the base commit, for sdlc_hooks/snyk_gate.py. `host` is the SnykHost it builds."""
 from __future__ import annotations
 
 from pathlib import Path

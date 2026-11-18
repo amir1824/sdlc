@@ -1,4 +1,4 @@
-"""Reading a Snyk MCP event for sdlc_gate.py: one scan record from the hook payload, and the check on a scan's
+"""Reading a Snyk MCP event for sdlc_hooks/snyk_gate.py: one scan record from the hook payload, and the check on a scan's
 arguments and path. No state is read or written here.
 
 The payload shapes come from a probe of a real Snyk MCP server (2026-11-18): a PostToolUse payload carries

@@ -1,8 +1,8 @@
-"""The close gate of the Snyk integration, for sdlc_gate.py: whether a write to a run's status.md may close the run or
+"""The close gate of the Snyk integration, for sdlc_hooks/snyk_gate.py: whether a write to a run's status.md may close the run or
 start Ship while the Security gate is not PASS, and the verdict and the denial text behind it.
 
-Nothing here catches an error: sdlc_gate.py calls it inside one handler that holds the write when Snyk is required.
-`host` is the SnykHost sdlc_gate.py builds (see there): the project, the state, and the loader of sibling modules.
+Nothing here catches an error: snyk_gate.py calls it inside one handler that holds the write when Snyk is required.
+`host` is the SnykHost snyk_gate.py builds (see there): the project, the state, and the loader of sibling modules.
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""The parts of the Snyk close gate that read text, for sdlc_gate.py: whether a write to a run's status.md closes
+"""The parts of the Snyk close gate that read text, for sdlc_hooks/snyk_gate.py: whether a write to a run's status.md closes
 the run or starts Ship, the text a file tool would leave, and the owner's `sdlc snyk ...` words. No file is
 read or written here.
 

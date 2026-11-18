@@ -13,12 +13,21 @@ removes it when this session reads that ticket and the `labels` (or `fields.labe
 object, holds the label (SDLC_JIRA_LABEL, default `sdlc`). Free text is never searched, so a ticket cannot spell
 its own label; a response in another shape leaves the intake pending, and the owner can reply `sdlc intake off`
 to go on without the label check: only the intake goes, the write block and the code lock stay.
+The exception is Snyk's three scans (`snyk_code_scan`, `snyk_sca_scan`, `snyk_iac_scan`) from a server named in
+SNYK_SERVERS (or in SDLC_SNYK_SERVERS, a comma list the owner sets), with only the arguments in snyk/events.py and a
+`path` that is the project or a folder in it, after symlinks, in a project that is not the home folder or `/`, and
+only where the owner typed `sdlc snyk on` (the consent to upload the source): they send the project's files to Snyk,
+not a ticket's text. Every other Snyk tool, `snyk_auth` and `snyk_trust` included, stays denied. Any error while
+deciding denies (the decision is `snyk_scan_allowed` in snyk_gate.py).
 ponytail: this stops a slip by the chair or text in a ticket, not a shell: Bash can delete the markers, as it can
 the lock; a `claude -p` child has its own session; `curl` and `acli` are not MCP; a crash or a timeout of the hook
 allows; a new `session_id` (/clear, a resume) has no marker, as it has no lock; an old `.sdlc/jira-*` folder marks
 a later gated session on its first MCP write; a name is judged by its words, so a write named like a read gets
-through when none of its words is in WRITE_WORDS; and the label is the owner's intent, not who set it; a tool with a read name but attacker-chosen arguments
-(fetch a URL, search) can still carry data out.
+through when none of its words is in WRITE_WORDS; and the label is the owner's intent, not who set it; a tool with
+a read name but attacker-chosen arguments (fetch a URL, search) can still carry data out.
+ponytail: a server's name is configuration, not identity: another server given an allowed name would be believed.
+A scan still uploads the project's source and dependency list to Snyk, and a Snyk server not named in
+SNYK_SERVERS is denied in a Jira run and not recorded anywhere.
 """
 from __future__ import annotations
 

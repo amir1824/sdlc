@@ -1,4 +1,4 @@
-"""The code a Snyk scan saw, for sdlc_gate.py: a hash of it, and the files that differ from a base commit.
+"""The code a Snyk scan saw, for sdlc_hooks/snyk_gate.py: a hash of it, and the files that differ from a base commit.
 
 The hash and the list share one Budget (3.5 seconds, below the 5-second hook timeout, which the host reads as allow,
 and 256 MiB of untracked content): a budget that runs out, or git failing, raises TreeUnavailable with the reason,

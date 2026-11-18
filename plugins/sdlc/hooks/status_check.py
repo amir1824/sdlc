@@ -19,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-MAX_BYTES = 64_000  # the same limit as STATUS_MAX_BYTES in sdlc_gate.py (a test pins them equal)
+MAX_BYTES = 64_000  # the same limit as STATUS_MAX_BYTES in sdlc_hooks/compact.py (a test pins them equal)
 PLAN_MAX_BYTES = 1024 * 1024
 QUOTE_CHARS = 80
 HOOK_MAX_FINDINGS = 10

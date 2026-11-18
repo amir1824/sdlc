@@ -1,11 +1,5 @@
 """The Snyk parts of the gate: the project's record, the owner's words, the close gate and the scan record.
 
-The exception is Snyk's three scans (`snyk_code_scan`, `snyk_sca_scan`, `snyk_iac_scan`) from a server named in
-SNYK_SERVERS (or in SDLC_SNYK_SERVERS, a comma list the owner sets), with only the arguments in snyk/events.py and a
-`path` that is the project or a folder in it, after symlinks, in a project that is not the home folder or `/`, and
-only where the owner typed `sdlc snyk on` (the consent to upload the source): they send the project's files to Snyk,
-not a ticket's text. Every other Snyk tool, `snyk_auth` and `snyk_trust`
-included, stays denied. Any error while deciding denies.
 `snyk-seen` (PostToolUse and PostToolUseFailure, matcher on Snyk's scan tools): records the scan in
 `sdlc-gate/snyk/<project>.json` (status, the hash of the code it saw, its findings), one record per kind of scan,
 the newest replacing the last. A scan that was not of the whole project, or whose reply is not a JSON success
@@ -17,8 +11,9 @@ code as it is now. Only the owner's typed words reach `prompt`; the slash form `
 command and starts a run. With Snyk on, a Write, Edit or MultiEdit of `.sdlc/<run>/status.md` (in any case, through a
 symlink, or as a hard link) that leaves the run closed or Ship running or done is denied unless security_gate.py says
 PASS (or INCOMPLETE and waived); a Bash command that names a status.md is denied; and in every project a Bash
-command that types `sdlc snyk on|off|accept|waive` is denied, so a child `claude -p` cannot speak as the owner. A record that cannot be read, a base that is not a commit, git failing or too slow (one 3.5-second budget for
-the changed files and the hash, under the hook's 5-second timeout), or an error while checking all hold the gate. Snyk
+command that types `sdlc snyk on|off|accept|waive` is denied, so a child `claude -p` cannot speak as the owner.
+A record that cannot be read, a base that is not a commit, git failing or too slow (one 3.5-second budget for the
+changed files and the hash, under the hook's 5-second timeout), or an error while checking all hold the gate. Snyk
 off or undecided changes nothing, and a broken module cannot touch such a project.
 ponytail: Bash that builds the path at run time or runs a script, another tool, or an edit outside the host can still write status.md;
 the gate stops a model's slip, not one set on getting past it, and is not a merge protection: a commit made outside
@@ -26,9 +21,6 @@ the gate stops a model's slip, not one set on getting past it, and is not a merg
 in the same project is judged against the old base (more files count as changed: the safe side). The owner's commands
 and `snyk-seen` read, change and write the record with no lock, so two at the same moment can lose one change (a scan
 record the gate then calls missing, or, rarely, a policy it then calls undecided).
-ponytail: a server's name is configuration, not identity: another server given an allowed name would be believed.
-A scan still uploads the project's source and dependency list to Snyk, and a Snyk server not named in
-SNYK_SERVERS is denied in a Jira run and not recorded anywhere.
 """
 from __future__ import annotations
 
@@ -92,8 +84,8 @@ def snyk_host() -> SnykHost:
 
 
 def snyk_scan_allowed(data: dict, call: tuple) -> bool:
-    """Whether a Snyk scan, `call` being (server, tool name, tool input), may run in a Jira run (see the module
-    docstring): the owner typed `sdlc snyk on` for the project, which is the consent to upload its source. Any error
+    """Whether a Snyk scan, `call` being (server, tool name, tool input), may run in a Jira run (see the docstring
+    of jira/mcp.py): the owner typed `sdlc snyk on` for the project, which is the consent to upload its source. Any error
     is a no."""
     try:
         if snyk_state_of(data)["policy"] != POLICY_ON:
