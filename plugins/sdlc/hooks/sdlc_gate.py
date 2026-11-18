@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The sdlc gate hooks for Claude Code: one script, six hook modes.
+"""The sdlc gate hooks for Claude Code: one script, seven hook modes.
 
 `prompt` (UserPromptSubmit): a typed `/sdlc` locks code edits in that session; a reply of
 exactly `approve plan` unlocks them and binds the approval to the hash of
@@ -36,12 +36,24 @@ removes it when this session reads that ticket and the `labels` (or `fields.labe
 object, holds the label (SDLC_JIRA_LABEL, default `sdlc`). Free text is never searched, so a ticket cannot spell
 its own label; a response in another shape leaves the intake pending, and the owner can reply `sdlc intake off`
 to go on without the label check: only the intake goes, the write block and the code lock stay.
+The exception is Snyk's three scans (`snyk_code_scan`, `snyk_sca_scan`, `snyk_iac_scan`) from a server named in
+SNYK_SERVERS (or in SDLC_SNYK_SERVERS, a comma list the owner sets), with only the arguments in snyk_events.py and a
+`path` that is the project or a folder in it, after symlinks, in a project that is not the home folder or `/`:
+they upload the project's files to Snyk, not a ticket's text. Every other Snyk tool, `snyk_auth` and `snyk_trust`
+included, stays denied. Any error while deciding denies.
+`snyk-seen` (PostToolUse and PostToolUseFailure, matcher on Snyk's scan tools): records the scan in
+`sdlc-gate/snyk/<project>.json` (status, the hash of the code it saw, its findings), one record per kind of scan,
+the newest replacing the last. A scan that was not of the whole project, or whose reply is not a JSON success
+with a matching count, is recorded as unusable or error, never as an empty result. It decides nothing yet.
 ponytail: this stops a slip by the chair or text in a ticket, not a shell: Bash can delete the markers, as it can
 the lock; a `claude -p` child has its own session; `curl` and `acli` are not MCP; a crash or a timeout of the hook
 allows; a new `session_id` (/clear, a resume) has no marker, as it has no lock; an old `.sdlc/jira-*` folder marks
 a later gated session on its first MCP write; a name is judged by its words, so a write named like a read gets
 through when none of its words is in WRITE_WORDS; and the label is the owner's intent, not who set it; a tool with a read name but attacker-chosen arguments
 (fetch a URL, search) can still carry data out.
+ponytail: a server's name is configuration, not identity: another server given an allowed name would be believed.
+A scan still uploads the project's source and dependency list to Snyk, and a Snyk server not named in
+SNYK_SERVERS is denied in a Jira run and not recorded anywhere.
 `precompact` (PreCompact) and `compacted` (SessionStart, matcher `compact`): in a session with a lock or
 an approval, the first prints what the compaction summary should keep, and the second puts the gate's
 state and each open run's status.md back into the context, as fenced data. Neither changes state, and
@@ -63,13 +75,14 @@ for Bash); a command that names the gate's state folder and writes is denied, bu
 time is not seen; a run resumed in a new session needs the approval typed again; and input that cannot
 name a session fails open. An OS sandbox and a lock keyed by run lift these.
 Edits outside CLAUDE_PROJECT_DIR (a sibling package of a larger repo) are never gated.
-One file over the 200-line limit on purpose: `python3 -I` drops this folder from sys.path,
-so a second module would need path hacking to import.
+One file over the 200-line limit on purpose. `python3 -I` drops this folder from sys.path, so the
+two sibling modules (security_gate.py, snyk_events.py) are loaded by their file path (load_sibling), not imported.
 """
 from __future__ import annotations
 
 import bisect
 import hashlib
+import importlib.util
 import itertools
 import json
 import os
@@ -920,6 +933,8 @@ def mcp_reason(data: dict) -> str:
         return ""
     if not (jira_marker_exists(data) or gated_session_with_jira_run(data)):
         return ""
+    if snyk_scan_allowed(data, parts[1], name, tool_input):
+        return ""
     return (f"sdlc-gate: {name} is an MCP tool that may change something outside this session, and this "
             "session has a Jira run, which only reads. If it is wanted, the owner replies `sdlc off`.")
 
@@ -1232,6 +1247,60 @@ def on_mcp(data: dict) -> None:
         deny(reason)
 
 
+def load_sibling(name: str):
+    """A module of this folder, loaded by its file path: `python3 -I` leaves the folder off sys.path."""
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def snyk_servers() -> frozenset[str]:
+    named = os.environ.get("SDLC_SNYK_SERVERS", "")
+    return frozenset({"Snyk_Security", *filter(None, (word.strip() for word in named.split(",")))})
+
+
+def snyk_scan_allowed(data: dict, server: str, name: str, tool_input: object) -> bool:
+    """Whether a Snyk scan may run in a Jira run (see the module docstring). Any error is a no."""
+    try:
+        return load_sibling("snyk_events").jira_call_allowed(
+            server, name, tool_input, str(project_root(data)), canonical, str(Path.home()), snyk_servers())
+    except Exception:  # fail closed: a scan that cannot be judged does not run
+        return False
+
+
+def snyk_state_path(root: Path) -> Path:
+    return state_dir() / "snyk" / f"{hashlib.sha256(canonical(root).encode()).hexdigest()[:32]}.json"
+
+
+def read_snyk_state(path: Path) -> dict:
+    empty = {"policy": None, "scans": {}, "accepted": [], "waived": []}
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return empty
+    return {**empty, **loaded} if isinstance(loaded, dict) and isinstance(loaded.get("scans"), dict) else empty
+
+
+def on_snyk_seen(data: dict) -> None:
+    """PostToolUse and PostToolUseFailure: record a Snyk scan of this project in the project's state."""
+    events = load_sibling("snyk_events")
+    if str(data.get("tool_name", "")).rsplit("__", 1)[-1] not in events.SCAN_TOOLS:
+        return
+    root = project_root(data)
+    found = events.record_from_event(data, str(root), events.tree_hash(root), snyk_servers(), canonical)
+    if found is None:
+        return
+    scanner, record = found
+    path = snyk_state_path(root)
+    state = read_snyk_state(path)
+    state["scans"] = {**state["scans"], scanner: record}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f".{os.getpid()}.tmp")
+    temp.write_text(json.dumps(state))
+    os.replace(temp, path)
+
+
 def guarded(handler, data: dict, active, situation: str) -> None:
     """Run a PreToolUse handler. A crash must not open a gate the owner closed: where `active(data)` says a
     limit is on, it denies; elsewhere the error propagates and the host lets the call through."""
@@ -1337,13 +1406,18 @@ def main() -> int:
             on_jira_seen(data)
         except Exception as error:  # a PostToolUse hook cannot block; whatever goes wrong leaves the intake pending
             note_denial(data, "jira-seen-error", type(error).__name__)
+    elif mode == "snyk-seen":
+        try:
+            on_snyk_seen(data)
+        except Exception as error:  # a PostToolUse hook cannot block; a scan not recorded leaves the gate incomplete
+            note_denial(data, "snyk-seen-error", type(error).__name__)
     elif mode == "precompact":
         on_precompact(data)
     elif mode == "compacted":
         on_compacted(data)
     else:
         raise ValueError(f"sdlc_gate.py: unknown mode {mode!r}; expected 'prompt', 'tool', 'mcp', "
-                         "'jira-seen', 'precompact' or 'compacted'")
+                         "'jira-seen', 'snyk-seen', 'precompact' or 'compacted'")
     return 0
 
 

@@ -1,5 +1,5 @@
 {
-  "description": "sdlc gates: no code before the owner approves the plan, no MCP write and no approval before the ticket's label was seen in a Jira run, Evidence: on fix commits, read-only review agents stay read-only, a fix's reproduction tests are frozen for everyone but qa-engineer, and a compaction in a run keeps the run's place",
+  "description": "sdlc gates: no code before the owner approves the plan, no MCP write and no approval before the ticket's label was seen in a Jira run, Evidence: on fix commits, read-only review agents stay read-only, a fix's reproduction tests are frozen for everyone but qa-engineer, a compaction in a run keeps the run's place, and a Snyk scan of the project is recorded",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -48,6 +48,20 @@
         "matcher": "^mcp__.*(getJiraIssue|executeRead|execute_read|jira_get_issue)",
         "hooks": [
           { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py\" jira-seen", "timeout": 5 }
+        ]
+      },
+      {
+        "matcher": "^mcp__.*__snyk_(code|sca|iac)_scan$",
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py\" snyk-seen", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^mcp__.*__snyk_(code|sca|iac)_scan$",
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py\" snyk-seen", "timeout": 5 }
         ]
       }
     ]
