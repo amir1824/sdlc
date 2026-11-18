@@ -111,6 +111,32 @@ class StatusCheckTest(unittest.TestCase):
                                 "4 Plan: running - S1 failed\n5 Build: blocked - S1 failed\nwaiting: owner")
         self.assertEqual(self.check(text).stdout, "")
 
+    def test_a_done_verify_after_a_build_blocked_by_an_amended_plan_is_not_reported(self):
+        text = FULL_RUN.replace("5 Build: done\nwaiting: Verify", "5 Build: blocked - plan amended\n6 Verify: done\nwaiting: owner")
+        self.assertEqual(self.check(text, files=FULL_FILES + ("review.md",)).stdout, "")
+
+    def test_a_done_ship_after_a_skipped_verify_and_a_build_blocked_by_an_amended_plan_is_not_reported(self):
+        text = FULL_RUN.replace("5 Build: done\nwaiting: Verify",
+                                "5 Build: blocked - plan amended\n6 Verify: skipped - plan amended\n7 Ship: done\nwaiting: owner")
+        self.assertEqual(self.check(text, files=FULL_FILES + ("review.md", "release.md")).stdout, "")
+
+    def test_a_done_ship_after_a_verify_blocked_by_an_amended_plan_is_reported(self):
+        text = FULL_RUN.replace("5 Build: done\nwaiting: Verify",
+                                "5 Build: done\n6 Verify: blocked - plan amended\n7 Ship: done\nwaiting: owner")
+        self.assertIn("stage 7 Ship is done but stage 6 Verify is blocked", self.check(text, files=FULL_FILES + ("review.md", "release.md")).stdout)
+
+    def test_a_running_verify_after_a_build_blocked_by_an_amended_plan_is_reported(self):
+        text = FULL_RUN.replace("5 Build: done\nwaiting: Verify", "5 Build: blocked - plan amended\n6 Verify: running\nwaiting: owner")
+        self.assertIn("stage 6 Verify is running but stage 5 Build is blocked", self.check(text).stdout)
+
+    def test_a_done_verify_after_a_build_blocked_for_another_reason_is_reported(self):
+        text = FULL_RUN.replace("5 Build: done\nwaiting: Verify", "5 Build: blocked - waiting for a key\n6 Verify: done\nwaiting: owner")
+        self.assertIn("stage 6 Verify is done but stage 5 Build is blocked", self.check(text).stdout)
+
+    def test_a_done_verify_after_a_failed_build_is_reported(self):
+        text = FULL_RUN.replace("5 Build: done\nwaiting: Verify", "5 Build: failed - plan amended\n6 Verify: done\nwaiting: owner")
+        self.assertIn("stage 6 Verify is done but stage 5 Build is failed", self.check(text).stdout)
+
     def test_a_high_run_with_verify_done_and_no_test_run_row_is_reported(self):
         result = self.check_review(REVIEW_WITH_AN_EMPTY_TABLE)
         self.assertIn("stage 6 Verify is done but review.md has no row under Test runs (HIGH risk)", result.stdout)

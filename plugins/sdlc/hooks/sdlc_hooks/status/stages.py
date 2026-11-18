@@ -10,7 +10,8 @@ from pathlib import Path
 
 COMPLETE = ("done", "skipped")
 STARTED = ("running", "done")
-VERIFY = 6
+AMENDED_PLAN_REASON = "plan amended"  # the reason commands/sdlc.md has the run write on a blocked Build
+BUILD, VERIFY = 5, 6
 FILE_MAX_BYTES = 1024 * 1024
 QUOTE_CHARS = 80
 STAGES = ("Discover", "Define", "Design", "Plan", "Build", "Verify", "Ship", "Launch", "Learn")
@@ -19,15 +20,24 @@ TABLE_HEAD_LINES = 2  # the header row and its separator
 INTAKE_RESULTS = ("READY", "NEEDS_INFO", "RESCOPE_PROPOSED", "REJECTED")
 
 
+def is_blocked_by_plan_amendment(state: str, reason: str) -> bool:
+    """A stage the owner's plan amendment sent back (the caller says it is Build): its later stages still say done from before."""
+    return state == "blocked" and AMENDED_PLAN_REASON in reason
+
+
 def order_findings(stages: dict[int, tuple[str, str]]) -> list[str]:
-    """A running or done stage whose nearest earlier stage is neither done nor skipped."""
+    """A running or done stage whose nearest earlier stage is neither done nor skipped; a done stage after a Build
+    blocked by an amended plan is the update in progress, not a finding."""
     found = []
     for number, (state, _) in sorted(stages.items()):
         behind = next((earlier for earlier in range(number - 1, 0, -1)
                        if earlier in stages and stages[earlier][0] not in COMPLETE), None) if state in STARTED else None
-        if behind is not None:
+        if behind is None:
+            continue
+        behind_state, behind_reason = stages[behind]
+        if not (state == "done" and behind == BUILD and is_blocked_by_plan_amendment(behind_state, behind_reason)):
             found.append(f"stage {number} {STAGES[number - 1]} is {state} but stage {behind} {STAGES[behind - 1]} "
-                         f"is {stages[behind][0]}")
+                         f"is {behind_state}")
     return found
 
 

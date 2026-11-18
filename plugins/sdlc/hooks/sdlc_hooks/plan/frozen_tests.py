@@ -94,12 +94,12 @@ def approved_tests(data: dict) -> list[str] | None:
 
 
 def file_id(path: Path) -> tuple[int, int] | None:
-    """Which file `path` is (device and inode, so two names of one file agree); None when no file can be stat'ed there."""
+    """Which file `path` is (device and inode, so two names of one file agree); None when no file can be stat'ed there or the filesystem gives no inode."""
     try:
         info = os.stat(path)
     except OSError:  # no such file, or a folder on the way that cannot be searched: not a file we can match
         return None
-    return info.st_dev, info.st_ino
+    return (info.st_dev, info.st_ino) if info.st_ino else None  # inode 0 (some network mounts) names no file
 
 
 def frozen_matches(root: Path, spellings: list[str], paths: list[str]) -> list[tuple[str, str]]:

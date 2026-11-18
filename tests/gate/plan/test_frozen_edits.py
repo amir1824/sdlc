@@ -170,6 +170,10 @@ class FileIdTest(unittest.TestCase):
         with mock.patch.object(frozen_tests.os, "stat", side_effect=PermissionError("no")):
             self.assertIsNone(frozen_tests.file_id(Path("/anywhere/a.py")))
 
+    def test_a_file_whose_inode_is_zero_has_no_id(self):
+        with mock.patch.object(frozen_tests.os, "stat", return_value=mock.Mock(st_dev=3, st_ino=0)):
+            self.assertIsNone(frozen_tests.file_id(Path("/anywhere/a.py")))
+
     def test_a_file_that_does_not_exist_has_no_id(self):
         self.assertIsNone(frozen_tests.file_id(Path("/no/such/file.py")))
 

@@ -165,6 +165,11 @@ class ChangedFilesTest(GitRepoTest):
         self.flagged_link()
         self.assertEqual(tree.changed_files(self.root, self.head()), [])
 
+    def test_a_flagged_link_that_vanishes_before_it_is_read_is_listed_as_changed(self):
+        self.flagged_link()
+        with mock.patch.object(tree.os, "readlink", side_effect=FileNotFoundError("gone")):
+            self.assertEqual(tree.changed_files(self.root, self.head()), ["link.py"])
+
     def test_a_flagged_link_that_now_points_elsewhere_is_listed(self):
         self.flagged_link()
         (self.root / "link.py").unlink()

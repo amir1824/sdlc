@@ -15,6 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SDLC = REPO / "plugins" / "sdlc" / "commands" / "sdlc.md"
 TECH_LEAD = REPO / "plugins" / "sdlc" / "agents" / "tech-lead.md"
+BRUTAL_REVIEWER = REPO / "plugins" / "sdlc" / "agents" / "brutal-reviewer.md"
 PRODUCT_MANAGER = REPO / "plugins" / "sdlc" / "agents" / "product-manager.md"
 PRODUCT_DESIGNER = REPO / "plugins" / "sdlc" / "agents" / "product-designer.md"
 USER_RESEARCHER = REPO / "plugins" / "sdlc" / "agents" / "user-researcher.md"
@@ -208,7 +209,7 @@ class WordingTest(unittest.TestCase):
         self.assertIn("under **Open findings**", self.text)
 
     def test_the_summary_says_what_security_reviewer_read_and_missing_sections_reach_the_owner(self):
-        self.assertIn("says whether `security-reviewer` read the whole final `plan.md`", self.text)
+        self.assertIn("says whether `security-reviewer` and `brutal-reviewer` each read the whole final `plan.md`", self.text)
         self.assertIn("A required section still missing after the second send-back", self.text)
 
     def test_the_third_return_from_verify_to_build_stops_for_the_owner(self):
@@ -387,13 +388,13 @@ class WordingTest(unittest.TestCase):
         self.assertIn("change a decision, break a requirement or a **Must not happen** line, or leave a task in the breakdown unbuildable", section)
         self.assertIn("A missing required section and a diagram that fails to render are still sent back", section)
         self.assertIn("or a `[note]` that would change a decision, always counts as one of these", section)
-        self.assertIn("No new round of reviewers is started for the plan after `security-reviewer`'s read of the final `plan.md`", section)
+        self.assertIn("No new round of reviewers is started for the plan after the read of the final `plan.md` by `security-reviewer` and `brutal-reviewer`", section)
         self.assertIn("After the second send-back planning stops: what is still open goes to the owner or becomes a Spike", section)
 
     def test_a_reviewer_who_read_an_earlier_version_gets_the_delta_and_an_agent_gets_a_context_package(self):
         text = self.text
         self.assertIn("- **Delta reviews.** A reviewer who has read an earlier version gets the delta, not the documents again", text)
-        self.assertIn("the chair keeps each version a reviewer read as `plan.v<n>.md` in the run folder", text)
+        self.assertIn("the chair saves each version a reviewer read as `plan.v<n>.md` in the run folder", text)
         self.assertIn("which the chair saves as `diff.v<n>.patch` in the run folder", text)
         self.assertIn("A first whole read plus deltas that cover every change counts as having read the whole final file.", text)
         self.assertIn("For a plan, a full re-read is required when the delta touches a trust boundary the plan names, the To-Be diagram or a **Must not happen** line", text)
@@ -521,6 +522,80 @@ class ReproductionWordingTest(unittest.TestCase):
     def test_the_frontend_builder_leaves_a_frozen_test(self):
         self.assertIn("is never yours to edit, and the gate hook denies it",
                       (self.agents / "frontend-developer.md").read_text(encoding="utf-8"))
+
+
+class FeedbackRulesTest(unittest.TestCase):
+    def setUp(self):
+        self.text = SDLC.read_text(encoding="utf-8")
+
+    def section(self, heading, next_heading):
+        return self.text.split(heading)[1].split(next_heading)[0]
+
+    def test_a_plan_is_read_by_brutal_reviewer_for_medium_and_high_with_security_reviewers_read(self):
+        planning = self.section("## Planning discipline", "## Review rounds and cost")
+        plan_row = self.text.split("| 4 | Plan |")[1].split("\n")[0]
+        self.assertIn("`tech-lead`, then `security-reviewer` and `brutal-reviewer` on the plan", plan_row)
+        self.assertIn("`brutal-reviewer` reads `tech-lead`'s plan with `security-reviewer`'s read", planning)
+        self.assertIn("answers its Plan read: cost, design, compatibility, effect in practice and routing", planning)
+        self.assertIn("findings tagged `[blocking]` or `[note]` by that agent's own rule", planning)
+        self.assertIn("A `[blocking]` item counts in the Plan stage's send-backs.", planning)
+
+    def test_a_small_medium_plan_is_read_by_security_reviewer_only(self):
+        planning = self.section("## Planning discipline", "## Review rounds and cost")
+        self.assertIn("For HIGH, and for MEDIUM whose plan has an Architecture section or a Reader test or crosses components", planning)
+        self.assertIn("A smaller MEDIUM plan is read by `security-reviewer` only", planning)
+
+    def test_a_closed_run_is_not_resumed(self):
+        resume = self.text.split("\n## Resume\n")[1]
+        self.assertIn("A run whose last line is `closed` or `abandoned` is not resumed: say so and stop.", resume)
+
+    def test_the_brutal_reviewer_agent_has_a_plan_read_that_runs_no_git_diff(self):
+        text = BRUTAL_REVIEWER.read_text(encoding="utf-8")
+        self.assertIn("**Plan read, before any code exists.**", text)
+        self.assertIn("do not run `git diff`", text)
+        self.assertIn("`[blocking]`", text)
+        self.assertLess(text.index("Plan read"), text.index("When invoked, follow this workflow exactly"))
+
+    def test_text_an_llm_reads_gets_a_reader_test_in_the_plan_and_in_the_fix_brief(self):
+        planning = self.section("## Planning discipline", "## Review rounds and cost")
+        self.assertIn("the plan holds a **Reader test**", planning)
+        self.assertIn("result a literal reader of the new text produces. `tech-lead` writes it.", planning)
+        self.assertIn("carries the same table with the expected result per state, not only the wording", planning)
+
+    def test_tech_lead_has_a_reader_test_bullet_in_its_output(self):
+        self.assertIn("**Reader test**", TECH_LEAD.read_text(encoding="utf-8"))
+
+    def test_each_fix_is_classified_and_only_behavior_and_security_rounds_count(self):
+        rounds = self.section("## Review rounds and cost", "## Status and retro")
+        self.assertIn("The chair writes a class beside every other fix in `review.md`", rounds)
+        self.assertIn("a reviewer who finds it wrong reclassifies it", rounds)
+        self.assertIn("`wording`", rounds)
+        self.assertIn("no file an LLM reads as instruction", rounds)
+        self.assertIn("no reviewer, and so no round of the cap in `rules/sdlc.md`", rounds)
+        self.assertIn("`behavior`", rounds)
+        self.assertIn("`security`", rounds)
+
+    def test_plan_versions_are_saved_with_write_once_per_reviewed_version(self):
+        rounds = self.section("- **Delta reviews.**", "- **Context packages.**")
+        self.assertIn("with the Write tool, once per reviewed version, not per edit", rounds)
+        self.assertNotIn("the chair keeps each version a reviewer read", rounds)
+
+    def test_findings_after_the_run_closes_are_sorted_by_the_chair(self):
+        retro = self.section("## Status and retro", "## Resume")
+        self.assertIn("after the run is closed", retro)
+        self.assertIn("do not reopen it: its files are not edited", retro)
+        self.assertIn("starts a new lean run with the findings as its request", retro)
+        self.assertNotIn("/sdlc resume <slug>", retro)
+
+    def test_planning_stops_after_both_reviewers_read_the_final_plan(self):
+        planning = self.section("## Planning discipline", "## Review rounds and cost")
+        self.assertIn("No new round of reviewers is started for the plan after the read of the final `plan.md` "
+                      "by `security-reviewer` and `brutal-reviewer`.", planning)
+
+    def test_a_plan_read_skips_the_change_review_steps_and_begins_with_the_read_line(self):
+        text = BRUTAL_REVIEWER.read_text(encoding="utf-8")
+        self.assertIn("Skip steps 1, 3a, 4 and 5 of the workflow below and the output format", text)
+        self.assertIn("begin with the `read:` line the chair's brief asks for", text)
 
 
 class FingerprintTest(unittest.TestCase):

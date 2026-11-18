@@ -123,7 +123,11 @@ def current_hashes(root: Path, names: list[str], budget: Budget) -> dict[str, by
             raise TreeUnavailable("git hash-object gave an answer of the wrong length")
         found.update(zip(kinds["file"], hashes))
     for name in kinds["link"]:
-        found[name] = run_git(root, "hash-object", "--stdin", budget=budget, stdin=os.fsencode(os.readlink(root / name))).strip()
+        try:
+            target = os.fsencode(os.readlink(root / name))
+        except OSError:  # gone since the lstat: it has no hash, so it differs
+            continue
+        found[name] = run_git(root, "hash-object", "--stdin", budget=budget, stdin=target).strip()
     return found
 
 

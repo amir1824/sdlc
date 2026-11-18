@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent))  # -I leaves this folder off sys.path; the package comes last
 from sdlc_hooks.status.fingerprint import print_fingerprint  # noqa: E402
-from sdlc_hooks.status.stages import FILE_MAX_BYTES, QUOTE_CHARS, STAGES, intake_findings, order_findings, test_run_findings  # noqa: E402,E501
+from sdlc_hooks.status.stages import BUILD, FILE_MAX_BYTES, QUOTE_CHARS, STAGES, intake_findings, order_findings, test_run_findings  # noqa: E402,E501
 
 MAX_BYTES = 64_000  # the same limit as STATUS_MAX_BYTES in sdlc_hooks/compact.py (a test pins them equal)
 HOOK_MAX_FINDINGS = 10
@@ -33,7 +33,7 @@ LAST_LINE = re.compile(r"waiting: .+|closed|abandoned: .+")
 COMMIT_HASH_PATTERN = re.compile(r"[0-9a-f]{40,64}")
 REQUIRED_HEADER = ("run", "risk", "path", "base")
 LEAN_SKIPPED = (1, 2, 3, 8, 9)
-SHIP, BUILD = 7, 5
+SHIP = 7
 # stage number -> groups of files; a stage marked done needs one file from every group
 STAGE_FILES = {
     1: (("research.md", "intent.md"),),
