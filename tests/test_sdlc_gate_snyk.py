@@ -85,6 +85,11 @@ class SnykSeenTest(SnykGateTest):
         self.seen()
         self.assertEqual(self.state()["scans"]["code"]["status"], "unusable")
 
+    def test_the_unusable_scan_keeps_the_reason_the_code_could_not_be_hashed(self):
+        subprocess.run(["rm", "-rf", str(self.project / ".git")], check=True)
+        self.seen()
+        self.assertIn("git rev-parse failed", self.state()["scans"]["code"]["note"])
+
     def test_a_later_scan_replaces_the_earlier_one_of_its_kind(self):
         self.seen()
         self.seen(kind="PostToolUseFailure")
@@ -108,6 +113,7 @@ class SnykSeenTest(SnykGateTest):
 class SnykInJiraRunTest(SnykGateTest):
     def setUp(self):
         super().setUp()
+        self.prompt("sdlc snyk on")
         self.jira_run_approved()
 
     def test_a_scan_of_the_project_runs(self):
@@ -159,6 +165,17 @@ class SnykInJiraRunTest(SnykGateTest):
         self.assertIn("snyk_auth", self.reason(done))
 
 
+class SnykConsentInJiraRunTest(SnykGateTest):
+    def test_a_scan_is_denied_in_a_project_that_has_not_decided(self):
+        self.jira_run_approved()
+        self.assertTrue(self.scan_denied({"path": str(self.project)}))
+
+    def test_a_scan_is_denied_in_a_project_that_turned_snyk_off(self):
+        self.prompt("sdlc snyk off")
+        self.jira_run_approved()
+        self.assertTrue(self.scan_denied({"path": str(self.project)}))
+
+
 class SnykOutsideJiraRunTest(SnykGateTest):
     def test_a_session_with_no_jira_run_is_not_limited(self):
         self.assertFalse(self.scan_denied({"path": str(self.home), "org": "x"}))
@@ -190,6 +207,45 @@ class WiringTest(unittest.TestCase):
 
     def test_the_matcher_skips_every_other_snyk_tool(self):
         self.assertEqual([tool for tool in OTHER_SNYK_TOOLS if re.search(self.MATCHER, SNYK + tool)], [])
+
+
+GATE_TAG = "Snyk gate"
+OPEN_RUN = "run: feature\n6 Verify: done\nwaiting: owner\n"
+CLOSED_RUN = "run: feature\nclosed\n"
+HIGH = {**ISSUE, "severity": "High", "filePath": "app.py", "fingerPrint": "fp-high",
+        "dataflow": [{"position": 0, "filePath": "app.py"}]}
+
+
+class SnykCloseTest(SnykGateTest):
+    def setUp(self):
+        super().setUp()
+        self.status = self.project / ".sdlc" / "feature" / "status.md"
+        self.status.write_text(OPEN_RUN)
+
+    def close_with(self, text=CLOSED_RUN, path=None):
+        return self.run_hook("tool", {"tool_name": "Write",
+                                      "tool_input": {"file_path": str(path or self.status), "content": text}})
+
+    def closing_denied(self, text=CLOSED_RUN, path=None):
+        return GATE_TAG in self.close_with(text, path).stdout
+
+    def edit_status(self, tool, tool_input):
+        done = self.run_hook("tool", {"tool_name": tool, "tool_input": {"file_path": str(self.status), **tool_input}})
+        return GATE_TAG in done.stdout
+
+    def edit_code(self, text="x = 2\n"):
+        (self.project / "app.py").write_text(text)
+
+    def snyk_on_and_approved(self):
+        self.prompt("sdlc snyk on")
+        self.locked_and_approved()
+
+    def head(self):
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.project, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def denial(self, text=CLOSED_RUN):
+        return self.reason(self.close_with(text))
 
 
 if __name__ == "__main__":

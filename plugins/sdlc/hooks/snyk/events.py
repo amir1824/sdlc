@@ -1,26 +1,23 @@
-"""Reading a Snyk MCP event for sdlc_gate.py: one scan record from the hook payload, the check on a scan's
-arguments and path, and the hash of the code a scan saw. No state is read or written here.
+"""Reading a Snyk MCP event for sdlc_gate.py: one scan record from the hook payload, and the check on a scan's
+arguments and path. No state is read or written here.
 
 The payload shapes come from a probe of a real Snyk MCP server (2026-11-18): a PostToolUse payload carries
 `mcp_server`, an object such as {"name": "Snyk Security", "source": "sdk"} (the display name, with a space; the
 tool name spells it Snyk_Security), and a `tool_response` that is a list of text blocks, the first holding the
-reply as a JSON string; a PostToolUseFailure payload carries `error` and no `tool_response`. A failure the server reports in plain
-text (not authenticated, folder not trusted, product not enabled) arrives as a normal reply, so a reply that
-is not a JSON object with `success` true is an error, never an empty result.
+reply as a JSON string; a PostToolUseFailure payload carries `error` and no `tool_response`. A failure the server reports in plain text
+(not authenticated, folder not trusted, product not enabled) arrives as a normal reply, so a reply that is not a
+JSON object with `success` true is an error, never an empty result.
 
+The hash of the code a scan saw, and the changed files, are in tree.py.
 ponytail: the IaC finding shape was never recorded from a real reply; its id is built from `id`, `filePath`
 and `line`, and a finding without them makes the scan unusable.
-ponytail: the hash reads every untracked file that is not ignored, with a 3-second limit on each git call
-and none on the reads; a project with a large untracked tree can run past the hook's timeout.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
-import subprocess
-from pathlib import Path
+from typing import Callable, NamedTuple
 
 SCAN_TOOLS = {"snyk_code_scan": "code", "snyk_sca_scan": "sca", "snyk_iac_scan": "iac"}
 ALLOWED_ARGUMENTS = {
@@ -37,8 +34,21 @@ ARGUMENT_CHECKS = {
 }
 MAX_FINDINGS = 2000
 MAX_REPLY_CHARS = 2_000_000
-GIT_SECONDS = 3
-RUN_FOLDER_PATHSPEC = ":!.sdlc"
+
+
+class Project(NamedTuple):
+    """The project a scan belongs to, and what the checks on it need from the host: `canonical` resolves a path to one
+    spelling, `servers` are the Snyk server names the owner allows."""
+    root: str
+    canonical: Callable[[str], str]
+    home: str
+    servers: frozenset
+
+
+class McpCall(NamedTuple):
+    server: str
+    name: str
+    tool_input: object
 
 
 def arguments_ok(scanner: str, tool_input: object) -> bool:
@@ -50,23 +60,23 @@ def arguments_ok(scanner: str, tool_input: object) -> bool:
     return all(ARGUMENT_CHECKS[key](value) for key, value in tool_input.items())
 
 
-def path_inside(path: object, root: str, canon, home: str) -> bool:
+def path_inside(path: object, project: Project) -> bool:
     """Whether `path` is the project root or a folder in it, after symlinks. A root that is the home folder
     or `/` is no project."""
     if not isinstance(path, str) or "\x00" in path or not os.path.isabs(path):
         return False
-    real_root = canon(root)
-    if real_root in (canon(home), canon(os.sep)):
+    real_root = project.canonical(project.root)
+    if real_root in (project.canonical(project.home), project.canonical(os.sep)):
         return False
-    return os.path.commonpath([canon(path), real_root]) == real_root
+    return os.path.commonpath([project.canonical(path), real_root]) == real_root
 
 
-def jira_call_allowed(server: str, name: str, tool_input: object, root: str, canon, home: str, servers) -> bool:
+def jira_call_allowed(call: McpCall, project: Project) -> bool:
     """Whether a Snyk scan may run in a Jira run: a listed server, one of the three scans, only the safe
     arguments, and a path inside the project."""
-    scanner = SCAN_TOOLS.get(name)
-    return (server in servers and scanner is not None and arguments_ok(scanner, tool_input)
-            and path_inside(tool_input.get("path"), root, canon, home))
+    scanner = SCAN_TOOLS.get(call.name)
+    return (call.server in project.servers and scanner is not None and arguments_ok(scanner, call.tool_input)
+            and path_inside(call.tool_input.get("path"), project))
 
 
 def reply_object(response: object) -> dict | None:
@@ -109,9 +119,12 @@ def finding_of(issue: object, scanner: str, root: str) -> dict | None:
             "flow": [relative(step, root) for step in flow]}
 
 
-def full_scan(scanner: str, tool_input: object, root: str, canon) -> bool:
+def full_scan(scanner: str, tool_input: object, project: Project) -> bool:
+    """A scan of the project root that covers every project in it (a dependency scan without `all_projects` reads
+    only the root's manifest)."""
     return (arguments_ok(scanner, tool_input) and isinstance(tool_input.get("path"), str)
-            and canon(tool_input["path"]) == canon(root))
+            and project.canonical(tool_input["path"]) == project.canonical(project.root)
+            and (scanner != "sca" or tool_input.get("all_projects") is True))
 
 
 def server_name(value: object) -> str | None:
@@ -121,53 +134,21 @@ def server_name(value: object) -> str | None:
     return re.sub(r"[^A-Za-z0-9_-]", "_", name) if isinstance(name, str) else None
 
 
-def record_from_event(event: dict, root: str, tree: str | None, servers, canon) -> tuple[str, dict] | None:
+def record_from_event(event: dict, project: Project, tree: str | None) -> tuple[str, dict] | None:
     """(scanner, record) for a Snyk scan event, or None when the event is not a scan from a listed server.
     status is `completed`, `error` (failed, or a reply that is not a count-checked success) or `unusable`
     (the scan was narrowed, the code could not be hashed, or a finding is unreadable)."""
     parts = str(event.get("tool_name", "")).split("__", 2)
     scanner = SCAN_TOOLS.get(parts[2]) if len(parts) == 3 and parts[0] == "mcp" else None
     named = parts[1] if "mcp_server" not in event else server_name(event["mcp_server"])
-    if scanner is None or parts[1] not in servers or named != parts[1]:
+    if scanner is None or parts[1] not in project.servers or named != parts[1]:
         return None
     reply = None if event.get("hook_event_name") == "PostToolUseFailure" else reply_object(event.get("tool_response"))
     issues = reply.get("issues") if reply else None
     if not (reply and reply.get("success") is True and isinstance(issues, list) and len(issues) <= MAX_FINDINGS
             and reply.get("issueCount") == len(issues)):
         return scanner, {"status": "error", "tree": tree, "findings": []}
-    findings = [finding_of(issue, scanner, root) for issue in issues]
-    usable = tree is not None and full_scan(scanner, event.get("tool_input"), root, canon) and None not in findings
+    findings = [finding_of(issue, scanner, project.root) for issue in issues]
+    usable = tree is not None and full_scan(scanner, event.get("tool_input"), project) and None not in findings
     return scanner, {"status": "completed" if usable else "unusable", "tree": tree,
                      "findings": findings if usable else []}
-
-
-def run_git(root: Path, *args: str) -> bytes | None:
-    try:
-        return subprocess.run(["git", *args], cwd=root, capture_output=True, timeout=GIT_SECONDS, check=True).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def file_bytes_hash(path: Path) -> bytes:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(chunk)
-    except OSError:
-        return b"unreadable"
-    return digest.digest()
-
-
-def tree_hash(root: Path) -> str | None:
-    """A hash of HEAD, the diff against it and every untracked file, leaving out `.sdlc/`: the code a scan saw.
-    None when git cannot say (not a repo, no commit)."""
-    head = run_git(root, "rev-parse", "HEAD")
-    diff = run_git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--", ".", RUN_FOLDER_PATHSPEC)
-    names = run_git(root, "ls-files", "-o", "--exclude-standard", "-z", "--", ".", RUN_FOLDER_PATHSPEC)
-    if head is None or diff is None or names is None:
-        return None
-    digest = hashlib.sha256(head + b"\0" + diff)
-    for name in sorted(filter(None, names.split(b"\0"))):
-        digest.update(name + b"\0" + file_bytes_hash(root / os.fsdecode(name)))
-    return digest.hexdigest()

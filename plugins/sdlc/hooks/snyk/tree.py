@@ -1,0 +1,141 @@
+"""The code a Snyk scan saw, for sdlc_gate.py: a hash of it, and the files that differ from a base commit.
+
+The hash and the list share one Budget (3.5 seconds, below the 5-second hook timeout, which the host reads as allow,
+and 256 MiB of untracked content): a budget that runs out, or git failing, raises TreeUnavailable with the reason,
+which `collect` turns into the gate's "not hashed" or "change unknown" plus that reason, never into a pass. A symlink is hashed as its target's name, and a device or pipe is never opened, so
+`ln -s /dev/zero pad` cannot hold the hook.
+ponytail: the hash does not see a dirty submodule's content, a nested git repo, files marked assume-unchanged or
+skip-worktree, paths hidden by .git/info/exclude, or what a tracked symlink points at; the upgrade is `git submodule
+status` and `git ls-files -v` in the hash input. It is taken after the scan, so code changed during a scan is in it.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import stat
+import subprocess
+import time
+from pathlib import Path
+
+GIT_SECONDS = 3
+HOOK_BUDGET_SECONDS = 3.5
+MAX_HASH_BYTES = 256 * 1024 * 1024
+READ_CHUNK = 1 << 20
+RUN_FOLDER = ".sdlc"
+RUN_FOLDER_PATHSPEC = ":!" + RUN_FOLDER
+HASHING_BUDGET_SPENT = "time or byte budget spent while hashing untracked files"
+COMMIT_HASH = re.compile(r"[0-9a-f]{40,64}")
+
+
+class TreeUnavailable(Exception):
+    """Git cannot say, or the budget ran out; the message says which."""
+
+
+class Budget:
+    """Time and bytes one hook run may spend on git and on reading files."""
+
+    def __init__(self, seconds: float, max_bytes: int = MAX_HASH_BYTES):
+        self.end = time.monotonic() + seconds
+        self.bytes_left = max_bytes
+
+    def seconds_left(self) -> float:
+        return self.end - time.monotonic()
+
+    def take(self, size: int) -> bool:
+        """Spend `size` bytes; False when the bytes or the time are gone."""
+        self.bytes_left -= size
+        return self.bytes_left >= 0 and self.seconds_left() > 0
+
+
+def new_budget() -> Budget:
+    return Budget(HOOK_BUDGET_SECONDS)
+
+
+def run_git(root: Path, *args: str, budget: Budget | None = None) -> bytes:
+    seconds = min(GIT_SECONDS, (budget or Budget(GIT_SECONDS)).seconds_left())
+    if seconds <= 0:
+        raise TreeUnavailable("time budget spent")
+    try:
+        return subprocess.run(["git", *args], cwd=root, capture_output=True, timeout=seconds, check=True).stdout
+    except subprocess.TimeoutExpired:
+        raise TreeUnavailable(f"git {args[0]} timed out") from None
+    except (OSError, subprocess.SubprocessError):
+        raise TreeUnavailable(f"git {args[0]} failed") from None
+
+
+def file_digest(path: Path, budget: Budget) -> bytes:
+    """The hash of a regular file's content; TreeUnavailable when the budget runs out while reading it."""
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(READ_CHUNK), b""):
+                digest.update(chunk)
+                if not budget.take(len(chunk)):
+                    raise TreeUnavailable(HASHING_BUDGET_SPENT)
+    except OSError:
+        return b"unreadable"
+    return digest.digest()
+
+
+def entry_digest(path: Path, budget: Budget) -> bytes:
+    """What one untracked path adds to the hash: a link by its target's name, a regular file by its content, anything
+    else (a device, a pipe, a socket, a nested repo's folder) by its kind, never opened."""
+    try:
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            return b"link:" + os.fsencode(os.readlink(path))
+    except OSError:
+        return b"missing"
+    return file_digest(path, budget) if stat.S_ISREG(mode) else b"special"
+
+
+def head_commit(root: Path) -> str:
+    """The hash of HEAD; TreeUnavailable when there is no repo or no commit."""
+    return run_git(root, "rev-parse", "HEAD").decode().strip()
+
+
+def tree_hash(root: Path, budget: Budget | None = None) -> str:
+    """A hash of HEAD, the diff against it and every untracked file, leaving out `.sdlc/`: the code a scan saw.
+    TreeUnavailable when git cannot say (not a repo, no commit) or the budget runs out."""
+    budget = budget or new_budget()
+    head = run_git(root, "rev-parse", "HEAD", budget=budget)
+    diff = run_git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--", ".",
+                   RUN_FOLDER_PATHSPEC, budget=budget)
+    names = run_git(root, "ls-files", "-o", "--exclude-standard", "-z", "--", ".", RUN_FOLDER_PATHSPEC, budget=budget)
+    digest = hashlib.sha256(head + b"\0" + diff)
+    for name in sorted(filter(None, names.split(b"\0"))):
+        if budget.seconds_left() <= 0:
+            raise TreeUnavailable(HASHING_BUDGET_SPENT)
+        digest.update(name + b"\0" + entry_digest(root / os.fsdecode(name), budget))
+    return digest.hexdigest()
+
+
+def changed_files(root: Path, base: object, budget: Budget | None = None) -> list[str]:
+    """The files that differ from commit `base`, tracked or not, without `.sdlc/`, named relative to `root` (a project
+    that is a folder of a larger repo); a renamed file is listed under both names. TreeUnavailable when `base` is not
+    a commit hash, git cannot say, or the budget runs out."""
+    if not isinstance(base, str) or not COMMIT_HASH.fullmatch(base):
+        raise TreeUnavailable("no base commit is pinned")
+    budget = budget or new_budget()
+    tracked = run_git(root, "diff", "--name-only", "-z", "--no-renames", "--relative", base, "--", ".",
+                      RUN_FOLDER_PATHSPEC, budget=budget)
+    untracked = run_git(root, "ls-files", "-o", "--exclude-standard", "-z", "--", ".", RUN_FOLDER_PATHSPEC,
+                        budget=budget)
+    return sorted({os.fsdecode(name) for name in (tracked + b"\0" + untracked).split(b"\0") if name})
+
+
+def collect(root: Path, base: object, budget: Budget) -> tuple[list[str] | None, str | None, tuple[str, ...]]:
+    """(changed files, hash of the code, notes) for the gate; what git cannot say is None, with the reason in the notes."""
+    notes = []
+    try:
+        changed = changed_files(root, base, budget)
+    except TreeUnavailable as error:
+        changed = None
+        notes.append(f"changed files: {error}")
+    try:
+        code = tree_hash(root, budget)
+    except TreeUnavailable as error:
+        code = None
+        notes.append(f"code hash: {error}")
+    return changed, code, tuple(notes)

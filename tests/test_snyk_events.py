@@ -1,4 +1,4 @@
-"""Tests for plugins/sdlc/hooks/snyk_events.py: reading one Snyk MCP event into a scan record, the check on a
+"""Tests for plugins/sdlc/hooks/snyk/events.py: reading one Snyk MCP event into a scan record, the check on a
 scan's arguments and path, and the hash of the code a scan saw.
 
 The events here have the shape the probe recorded from a real Snyk MCP server on 2026-11-18: a PostToolUse
@@ -12,13 +12,12 @@ import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent.parent / "plugins" / "sdlc" / "hooks"
-SPEC = importlib.util.spec_from_file_location("snyk_events", HOOKS / "snyk_events.py")
+SPEC = importlib.util.spec_from_file_location("snyk_events", HOOKS / "snyk" / "events.py")
 events = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(events)
 
@@ -46,6 +45,9 @@ class TempDirTest(unittest.TestCase):
 
     def absolute(self, relative):
         return str(self.root / relative)
+
+    def project(self, root=None):
+        return events.Project(str(root or self.root), os.path.realpath, str(self.home), SERVERS)
 
 
 class ArgumentsTest(unittest.TestCase):
@@ -79,7 +81,7 @@ class ArgumentsTest(unittest.TestCase):
 
 class PathTest(TempDirTest):
     def inside(self, path, root=None):
-        return events.path_inside(path, str(root or self.root), os.path.realpath, str(self.home))
+        return events.path_inside(path, self.project(root))
 
     def test_the_project_root_and_a_folder_in_it_are_inside(self):
         (self.root / "src").mkdir()
@@ -118,8 +120,7 @@ class PathTest(TempDirTest):
 
 class JiraCallTest(TempDirTest):
     def allowed(self, server, name, tool_input):
-        return events.jira_call_allowed(server, name, tool_input, str(self.root), os.path.realpath,
-                                        str(self.home), SERVERS)
+        return events.jira_call_allowed(events.McpCall(server, name, tool_input), self.project())
 
     def test_a_scan_of_the_project_from_a_listed_server_is_allowed(self):
         self.assertTrue(self.allowed("Snyk_Security", "snyk_code_scan", {"path": self.absolute("")}))
@@ -147,7 +148,7 @@ class RecordTest(TempDirTest):
         return sent if error is None else {**{key: sent[key] for key in sent if key != "tool_response"}, "error": error}
 
     def read(self, sent, tree=TREE):
-        return events.record_from_event(sent, str(self.root), tree, SERVERS, os.path.realpath)
+        return events.record_from_event(sent, self.project(), tree)
 
     def reply(self, *issues):
         return {"success": True, "issueCount": len(issues), "issues": list(issues)}
@@ -160,7 +161,8 @@ class RecordTest(TempDirTest):
                                                "flow": ["a.py", "lib/b.py"]}])
 
     def test_a_dependency_finding_is_named_by_its_package_and_version(self):
-        sent = self.event("snyk_sca_scan", reply=self.reply(sca_issue(self.absolute("video/package.json"))))
+        whole = {"path": str(self.root), "all_projects": True}
+        sent = self.event("snyk_sca_scan", tool_input=whole, reply=self.reply(sca_issue(self.absolute("video/package.json"))))
         scanner, record = self.read(sent)
         self.assertEqual((scanner, record["findings"][0]["id"], record["findings"][0]["file"]),
                          ("sca", "SNYK-JS-OPEN-1@open@8.4.2", "video/package.json"))
@@ -206,6 +208,10 @@ class RecordTest(TempDirTest):
         sent = {key: value for key, value in self.event(reply=self.reply()).items() if key != "mcp_server"}
         self.assertEqual(self.read(sent)[1]["status"], "completed")
 
+    def test_a_dependency_scan_without_all_projects_is_unusable(self):
+        sent = self.event("snyk_sca_scan", reply=self.reply())
+        self.assertEqual(self.read(sent)[1]["status"], "unusable")
+
     def test_a_scan_of_a_subfolder_is_unusable(self):
         sent = self.event(tool_input={"path": self.absolute("src")}, reply=self.reply())
         self.assertEqual(self.read(sent)[1]["status"], "unusable")
@@ -225,41 +231,6 @@ class RecordTest(TempDirTest):
     def test_a_reply_with_too_many_findings_is_an_error(self):
         issues = [code_issue(f"fp-{n}") for n in range(events.MAX_FINDINGS + 1)]
         self.assertEqual(self.read(self.event(reply=self.reply(*issues)))[1]["status"], "error")
-
-
-class TreeHashTest(TempDirTest):
-    def git(self, *args):
-        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=n", *args], cwd=self.root, check=True,
-                       capture_output=True)
-
-    def setUp(self):
-        super().setUp()
-        self.git("init", "-q")
-        (self.root / "a.py").write_text("x = 1\n")
-        self.git("add", ".")
-        self.git("commit", "-q", "-m", "first")
-
-    def test_the_same_code_gives_the_same_hash(self):
-        self.assertEqual(events.tree_hash(self.root), events.tree_hash(self.root))
-
-    def test_an_edit_to_a_tracked_file_changes_it(self):
-        before = events.tree_hash(self.root)
-        (self.root / "a.py").write_text("x = 2\n")
-        self.assertNotEqual(events.tree_hash(self.root), before)
-
-    def test_a_new_untracked_file_changes_it(self):
-        before = events.tree_hash(self.root)
-        (self.root / "b.py").write_text("y = 1\n")
-        self.assertNotEqual(events.tree_hash(self.root), before)
-
-    def test_an_edit_inside_the_run_folder_does_not(self):
-        (self.root / ".sdlc" / "x").mkdir(parents=True)
-        before = events.tree_hash(self.root)
-        (self.root / ".sdlc" / "x" / "status.md").write_text("run: x\n")
-        self.assertEqual(events.tree_hash(self.root), before)
-
-    def test_a_folder_that_is_not_a_git_repo_has_no_hash(self):
-        self.assertIsNone(events.tree_hash(self.home))
 
 
 if __name__ == "__main__":

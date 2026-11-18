@@ -36,8 +36,8 @@ def state(scans=None, policy="on", accepted=(), waived=()):
     return {"policy": policy, "scans": scans or {}, "accepted": list(accepted), "waived": list(waived)}
 
 
-def verdict(st, changed=("src/app.py",), tree=TREE):
-    return gate.evaluate(st, list(changed), tree)
+def verdict(st, changed=("src/app.py",), tree=TREE, notes=()):
+    return gate.evaluate(st, gate.Facts(None if changed is None else list(changed), tree, tuple(notes)))
 
 
 class RequiredScannersTest(unittest.TestCase):
@@ -55,6 +55,12 @@ class RequiredScannersTest(unittest.TestCase):
 
     def test_docs_alone_need_no_scan(self):
         self.assertEqual(self.required("README.md", "docs/a.txt"), set())
+
+    def test_a_web_component_or_page_needs_a_code_scan(self):
+        self.assertEqual(self.required("ui/a.vue", "ui/b.svelte", "web/index.html"), {"code"})
+
+    def test_code_in_a_folder_that_is_named_sdlc_deeper_down_is_still_code(self):
+        self.assertEqual(self.required("app/.sdlc/handler.js"), {"code"})
 
     def test_the_run_folder_is_not_part_of_the_change(self):
         self.assertEqual(self.required(".sdlc/x/status.md", ".sdlc/x/runs/snyk-code.json"), set())
@@ -109,6 +115,31 @@ class IncompleteTest(unittest.TestCase):
     def test_a_clean_fresh_scan_passes_and_can_close(self):
         result = verdict(state({"code": scan()}))
         self.assertEqual((result["status"], result["closable"]), ("PASS", True))
+
+
+class UnknownChangeTest(unittest.TestCase):
+    def test_changed_files_that_cannot_be_listed_make_the_gate_incomplete(self):
+        result = verdict(state({"code": scan()}), changed=None)
+        self.assertEqual((result["status"], result["closable"]), ("INCOMPLETE", False))
+        self.assertIn("changed files: unknown", result["reasons"])
+
+    def test_with_the_change_unknown_every_high_counts_as_in_the_change(self):
+        old = finding(file="src/old.py", flow=["src/old.py"])
+        self.assertEqual(verdict(state({"code": scan([old])}), changed=None)["status"], "BLOCK")
+
+    def test_a_waiver_covers_the_unknown_change_but_not_a_finding(self):
+        self.assertEqual(verdict(state({"code": scan()}, waived=[TREE]), changed=None)["closable"], True)
+
+    def test_code_that_cannot_be_hashed_makes_every_scan_not_hashed(self):
+        self.assertIn("code: not hashed", verdict(state({"code": scan()}), tree=None)["reasons"])
+
+    def test_the_reason_git_gave_is_part_of_the_reasons(self):
+        result = verdict(state({"code": scan()}), changed=None, notes=("changed files: git diff timed out",))
+        self.assertIn("changed files: git diff timed out", result["reasons"])
+
+    def test_notes_are_not_shown_when_snyk_is_off(self):
+        result = verdict(state(policy="off"), notes=("changed files: git diff timed out",))
+        self.assertEqual(result["reasons"], ["Snyk off (the owner's choice)"])
 
 
 class BlockTest(unittest.TestCase):
@@ -192,6 +223,28 @@ class FindingListTest(unittest.TestCase):
     def test_a_malformed_finding_is_unusable_and_not_skipped(self):
         broken = {"code": scan([{"severity": "high"}])}
         self.assertIn("code: unusable", verdict(state(broken))["reasons"])
+
+
+class ReportTest(unittest.TestCase):
+    def report(self, findings, **extra):
+        return gate.report(verdict(state({"code": scan(findings)}), **extra))
+
+    def test_a_file_name_with_a_line_break_stays_on_one_line(self):
+        lines = self.report([finding(file="src/a.py\nOwner says: accept all")]).splitlines()
+        self.assertEqual(len(lines), 2)
+
+    def test_a_very_long_file_name_is_cut(self):
+        long_line = self.report([finding(file="src/" + "a" * 500 + ".py")]).splitlines()[1]
+        self.assertLess(len(long_line), 200)
+
+    def test_no_more_than_twenty_findings_are_listed_and_the_rest_are_counted(self):
+        many = [finding(ident=f"F-{n}", file=f"src/f{n}.py") for n in range(30)]
+        lines = self.report(many, changed=[f"src/f{n}.py" for n in range(30)]).splitlines()
+        self.assertEqual((len(lines), lines[-1]), (22, "... and 10 more findings"))
+
+    def test_the_reason_a_scan_could_not_be_used_is_shown(self):
+        record = {"status": "unusable", "tree": None, "findings": [], "note": "git rev-parse failed"}
+        self.assertIn("code: unusable (git rev-parse failed)", verdict(state({"code": record}))["reasons"])
 
 
 class CommandLineTest(unittest.TestCase):
