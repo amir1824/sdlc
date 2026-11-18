@@ -31,7 +31,9 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from sdlc_hooks.bash.parse import writes_files
-from sdlc_hooks.core import canonical, emit, log_event, now, project_root, written_relative
+from sdlc_hooks.core.audit import log_event, now
+from sdlc_hooks.core.output import emit
+from sdlc_hooks.core.project import canonical, project_root, written_relative
 from sdlc_hooks.snyk_state import POLICY_ON, read_snyk_state, snyk_required, snyk_servers, snyk_state_of, snyk_state_path, write_snyk_state
 
 SNYK_OWNER_WORDS = re.compile(r"sdlc\s+snyk\s+(?:on|off|accept|waive)\b", re.IGNORECASE)
@@ -44,8 +46,9 @@ STATUS_FILE_NAME = "status.md"
 
 @functools.cache
 def load_sibling(name: str):
-    """A module of the hooks folder (`snyk/events` for one in a subfolder), loaded by its file path: `python3 -I` leaves
-    the folder off sys.path. Loaded once per run of the hook."""
+    """A module of the hooks folder (`snyk/events` for one in a subfolder), loaded by its file path and not by import:
+    the entry appends the folder to sys.path after site-packages, so an installed package named `snyk` would win an
+    import and stand in for the gate's own folder; a path cannot be shadowed. Loaded once per run of the hook."""
     path = Path(__file__).resolve().parents[1] / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name.replace("/", "_"), path)
     module = importlib.util.module_from_spec(spec)

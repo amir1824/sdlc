@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import re
 
-from sdlc_hooks.core import project_root, session_file, session_gated
+from sdlc_hooks.core.project import project_root
+from sdlc_hooks.core.session import session_file, session_gated
 
 JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]{1,30}-[0-9]{1,9}")
 JIRA_RUN_KEY = re.compile(r"/(?:[\w-]+:)?sdlc\s+(?:(?:lean|full)\s+)?(?:jira\s+(?P<key>\S+)|resume\s+jira-(?P<slug>\S+))",

@@ -34,7 +34,9 @@ from __future__ import annotations
 import json
 import re
 
-from sdlc_hooks.core import deny, emit, log_event, session_file
+from sdlc_hooks.core.audit import log_event
+from sdlc_hooks.core.output import deny, emit
+from sdlc_hooks.core.session import session_file
 from sdlc_hooks.jira.markers import NO_KEY, gated_session_with_jira_run, intake_pending, jira_label, jira_marker_exists, mark_jira, words_of
 from sdlc_hooks.snyk_gate import snyk_scan_allowed
 

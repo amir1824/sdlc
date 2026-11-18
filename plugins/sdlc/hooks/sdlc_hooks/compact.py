@@ -19,7 +19,9 @@ import sys
 import unicodedata
 from pathlib import Path
 
-from sdlc_hooks.core import emit, project_root, session_gated
+from sdlc_hooks.core.output import emit
+from sdlc_hooks.core.project import project_root
+from sdlc_hooks.core.session import session_gated
 from sdlc_hooks.files.checks import lock_reason
 
 COMPACT_KEEP = (

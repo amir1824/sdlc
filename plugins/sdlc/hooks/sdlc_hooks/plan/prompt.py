@@ -13,7 +13,9 @@ import re
 import unicodedata
 from pathlib import Path
 
-from sdlc_hooks.core import UNLOCK_WORDS, emit, gate_home, log_event, now, session_file
+from sdlc_hooks.core.audit import log_event, now
+from sdlc_hooks.core.output import emit
+from sdlc_hooks.core.session import UNLOCK_WORDS, gate_home, session_file
 from sdlc_hooks.jira.markers import arm_intake, intake_pending, jira_marker_exists, jira_request, mark_jira
 from sdlc_hooks.plan.approval import approve, intake_start_note
 from sdlc_hooks.snyk_gate import on_snyk_command

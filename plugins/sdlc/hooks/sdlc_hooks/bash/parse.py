@@ -6,7 +6,8 @@ import bisect
 import re
 
 from sdlc_hooks.bash.patterns import AWK_START, AWK_WRITE, COMMIT_MESSAGE, COMMIT_STATEMENT, HEREDOC_HEAD, MAX_CHECKED_COMMAND, QUOTED, SCRATCH_REDIRECT, STATEMENT_END, WRITE_COMMAND
-from sdlc_hooks.core import CASE_INSENSITIVE_FS, state_dir
+from sdlc_hooks.core.project import CASE_INSENSITIVE_FS
+from sdlc_hooks.core.session import state_dir
 
 STATE_FOLDER = ".claude/sdlc-gate"
 

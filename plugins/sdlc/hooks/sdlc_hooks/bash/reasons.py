@@ -5,7 +5,8 @@ from __future__ import annotations
 from sdlc_hooks.bash.commits import commit_reason
 from sdlc_hooks.bash.parse import spells_state, too_long, writes_files, writes_state
 from sdlc_hooks.bash.patterns import MAX_CHECKED_COMMAND
-from sdlc_hooks.core import agent_name, project_root
+from sdlc_hooks.core.project import project_root
+from sdlc_hooks.core.session import agent_name
 from sdlc_hooks.files.checks import lock_reason
 
 READ_ONLY_AGENTS = {"tech-lead", "security-reviewer", "brutal-reviewer", "analyst", "leak-scanner"}

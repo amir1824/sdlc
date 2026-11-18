@@ -7,7 +7,8 @@ import json
 import os
 from pathlib import Path
 
-from sdlc_hooks.core import canonical, project_root, state_dir
+from sdlc_hooks.core.project import canonical, project_root
+from sdlc_hooks.core.session import state_dir
 
 POLICY_ON, POLICY_OFF, POLICY_UNREADABLE = "on", "off", "unreadable"  # as in security_gate.py; a test holds them equal
 

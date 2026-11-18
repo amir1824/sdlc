@@ -23,7 +23,10 @@ from __future__ import annotations
 import os
 
 from sdlc_hooks.bash.reasons import bash_reason
-from sdlc_hooks.core import agent_name, deny, note_denial, written_relative
+from sdlc_hooks.core.audit import note_denial
+from sdlc_hooks.core.output import deny
+from sdlc_hooks.core.project import written_relative
+from sdlc_hooks.core.session import agent_name
 from sdlc_hooks.files.checks import SCOPE_TAG, TESTS_TAG, file_tool_reason
 from sdlc_hooks.snyk_gate import SNYK_TAG, snyk_bash_reason, snyk_close_reason
 

@@ -36,20 +36,28 @@ from typing import NamedTuple
 sys.path.append(str(Path(__file__).resolve().parent))
 
 
+class Hold(NamedTuple):
+    """A limit that a crash must not lift: `predicate` (a function of `module`, given the hook's input) says whether
+    the limit is on, and `situation` finishes the sentence "while this session ..." in the denial."""
+    module: str
+    predicate: str
+    situation: str
+
+
 class Mode(NamedTuple):
-    """The handler of a hook mode, and what a crash in it means: `holds` is the (module, predicate, situation) of a limit
-    that a crash must not lift (the call is denied where the predicate says the limit is on), and `note` is the line
-    logged when a PostToolUse hook, which cannot block, fails."""
+    """The handler of a hook mode, and what a crash in it means: `holds` is the limit the call is denied for where it
+    is on, and `note` is the line logged when a PostToolUse hook, which cannot block, fails."""
     module: str
     function: str
-    holds: tuple[str, str, str] | None = None
+    holds: Hold | None = None
     note: str = ""
 
 
 MODES = {
     "prompt": Mode("sdlc_hooks.plan.prompt", "on_prompt"),
-    "tool": Mode("sdlc_hooks.tool", "on_tool", ("sdlc_hooks.core", "session_gated", "is locked or has an approved plan")),
-    "mcp": Mode("sdlc_hooks.jira.mcp", "on_mcp", ("sdlc_hooks.jira.markers", "jira_marker_exists", "has a Jira run")),
+    "tool": Mode("sdlc_hooks.tool", "on_tool",
+                 Hold("sdlc_hooks.core.session", "session_gated", "is locked or has an approved plan")),
+    "mcp": Mode("sdlc_hooks.jira.mcp", "on_mcp", Hold("sdlc_hooks.jira.markers", "jira_marker_exists", "has a Jira run")),
     "jira-seen": Mode("sdlc_hooks.jira.mcp", "on_jira_seen", note="jira-seen-error"),  # a failure leaves the intake pending
     "snyk-seen": Mode("sdlc_hooks.snyk_gate", "on_snyk_seen", note="snyk-seen-error"),  # a scan not recorded leaves the gate incomplete
     "precompact": Mode("sdlc_hooks.compact", "on_precompact"),
@@ -59,21 +67,25 @@ MODES = {
 
 def handle(mode: Mode, data: dict) -> None:
     """Run the mode's handler. A crash must not open a gate the owner closed: where the mode's limit is on, it denies;
-    elsewhere the error propagates and the host lets the call through."""
+    elsewhere the error propagates and the host lets the call through.
+    ponytail: the predicate's module is imported here, so when that module is the broken one the import error
+    propagates and the call goes through. Denying when the limit cannot be read would stop every tool call of every
+    project on a broken install (the hook is global, and `SDLC_GATE=off` cannot be set from inside a session). A
+    check that reads the lock file with no import would close it."""
     try:
         getattr(importlib.import_module(mode.module), mode.function)(data)
     except Exception as error:
-        core = importlib.import_module("sdlc_hooks.core")
         if mode.note:
-            core.note_denial(data, mode.note, type(error).__name__)
+            importlib.import_module("sdlc_hooks.core.audit").note_denial(data, mode.note, type(error).__name__)
             return
         if mode.holds is None:
             raise
-        module, predicate, situation = mode.holds
-        if not getattr(importlib.import_module(module), predicate)(data):
+        hold = mode.holds
+        if not getattr(importlib.import_module(hold.module), hold.predicate)(data):
             raise
-        core.deny(f"sdlc-gate: the gate failed ({type(error).__name__}) while this session {situation}, so it denies "
-                  "this action. The owner can reply `sdlc off` to release the session.")
+        importlib.import_module("sdlc_hooks.core.output").deny(
+            f"sdlc-gate: the gate failed ({type(error).__name__}) while this session {hold.situation}, so it denies "
+            "this action. The owner can reply `sdlc off` to release the session.")
 
 
 def main() -> int:
@@ -83,7 +95,7 @@ def main() -> int:
     name = sys.argv[1] if len(sys.argv) > 1 else ""
     data = json.load(sys.stdin)
     if os.environ.get("SDLC_GATE_TRACE"):
-        importlib.import_module("sdlc_hooks.core").trace(name, data)
+        importlib.import_module("sdlc_hooks.core.audit").trace(name, data)
     if name not in MODES:
         raise ValueError(f"sdlc_gate.py: unknown mode {name!r}; expected 'prompt', 'tool', 'mcp', "
                          "'jira-seen', 'snyk-seen', 'precompact' or 'compacted'")

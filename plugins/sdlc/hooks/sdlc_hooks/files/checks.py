@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sdlc_hooks.core import UNLOCK_WORDS, agent_name, canonical, project_root, protected, session_file, session_gated, state_dir, written_relative
+from sdlc_hooks.core.project import canonical, project_root, protected, written_relative
+from sdlc_hooks.core.session import UNLOCK_WORDS, agent_name, session_file, session_gated, state_dir
 from sdlc_hooks.plan.approval import approved_scope, changed_plans
 from sdlc_hooks.plan.frozen_tests import TESTS_WRITER, approved_tests, frozen_key, frozen_keys
 from sdlc_hooks.plan.scope import glob_match

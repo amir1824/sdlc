@@ -7,7 +7,10 @@ import json
 import os
 from pathlib import Path
 
-from sdlc_hooks.core import emit, log_event, now, project_root, session_file
+from sdlc_hooks.core.audit import log_event, now
+from sdlc_hooks.core.output import emit
+from sdlc_hooks.core.project import project_root
+from sdlc_hooks.core.session import session_file
 from sdlc_hooks.jira.markers import NO_KEY, intake_pending, jira_label
 from sdlc_hooks.plan.frozen_tests import TESTS_BLOCK, TESTS_WRITER, frozen_key, has_block, parse_tests, previous_tests
 from sdlc_hooks.plan.scope import SCOPE_BLOCK, parse_scope

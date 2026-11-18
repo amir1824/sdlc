@@ -8,7 +8,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from sdlc_hooks.core import session_file
+from sdlc_hooks.core.session import session_file
 from sdlc_hooks.plan.scope import SCOPE_BLOCK, check_glob, fenced_block, glob_match, opens_fence
 
 TESTS_BLOCK, TESTS_MAX_ENTRIES, TESTS_WRITER = "sdlc-tests", 20, "qa-engineer"

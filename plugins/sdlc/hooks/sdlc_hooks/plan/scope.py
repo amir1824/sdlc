@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 
-from sdlc_hooks.core import CASE_INSENSITIVE_FS, PROTECTED_NAMES
+from sdlc_hooks.core.project import CASE_INSENSITIVE_FS, PROTECTED_NAMES
 
 SCOPE_BLOCK = "sdlc-scope"
 SCOPE_MAX_ENTRIES, SCOPE_MAX_ENTRY, SCOPE_MAX_BYTES, SCOPE_MAX_PARTS = 100, 200, 8192, 100
