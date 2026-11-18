@@ -54,6 +54,21 @@ class WordingTest(unittest.TestCase):
     def test_command_defines_the_status_header(self):
         self.assertRegex(self.text, r"`run: <slug>`, `risk: .*`base: .*`plan-sha: ")
 
+    def test_the_verify_row_runs_the_snyk_scans_and_records_the_security_gate_line(self):
+        verify = self.text.split("| 6 | Verify |")[1].split("\n")[0]
+        self.assertIn("`sdlc snyk on`", verify)
+        self.assertIn("the `Security gate:` line", verify)
+        self.assertIn("`Security gate: not run - <reason>`", verify)
+
+    def test_the_command_names_the_four_intake_results_and_keeps_them_to_a_header_key(self):
+        section = self.text.split("## Intake result")[1].split("\n## ")[0]
+        self.assertIn("`intake: <result>`", section)
+        self.assertIn("`READY`", section)
+        self.assertIn("`NEEDS_INFO`", section)
+        self.assertIn("`RESCOPE_PROPOSED`", section)
+        self.assertIn("`REJECTED`", section)
+        self.assertIn("adds no stage and no agent", section)
+
     def test_command_defines_resume_and_the_built_fingerprint(self):
         self.assertIn("## Resume", self.text)
         self.assertIn("`/sdlc resume <slug>`", self.text)
@@ -475,6 +490,10 @@ class ReproductionWordingTest(unittest.TestCase):
         self.assertIn("`brutal-reviewer` runs `git hash-object` on each frozen file and compares it with **Red run**",
                       self.text)
 
+    def test_verify_also_runs_the_gate_status_command_for_the_frozen_tests(self):
+        self.assertIn("it also runs `sdlc_gate.py frozen-status`", self.text)
+        self.assertIn("a line that says CHANGED is a mismatch even when `build.md` agrees with the file", self.text)
+
     def test_the_chair_does_not_route_a_weakening_through_qa(self):
         self.assertIn("The chair does not ask `qa-engineer` to change what a frozen test expects", self.text)
 
@@ -556,6 +575,41 @@ class FingerprintTest(unittest.TestCase):
         (self.repo / "pkg").mkdir()
         (self.repo / "pkg" / "m.py").write_text("x = 1\n")
         self.assertEqual(self.fingerprint(self.repo / "pkg"), self.fingerprint())
+
+    def test_an_edit_to_a_skip_worktree_file_changes_it(self):
+        self.git("update-index", "--skip-worktree", "a.txt")
+        before = self.fingerprint()
+        (self.repo / "a.txt").write_text("two\n")
+        self.assertNotEqual(self.fingerprint(), before)
+
+    def test_an_edit_to_an_assume_unchanged_file_changes_it(self):
+        self.git("update-index", "--assume-unchanged", "a.txt")
+        before = self.fingerprint()
+        (self.repo / "a.txt").write_text("two\n")
+        self.assertNotEqual(self.fingerprint(), before)
+
+    def test_an_edit_to_a_flagged_file_with_a_non_ascii_name_changes_it(self):
+        (self.repo / "\u00e9.py").write_text("one\n")
+        self.git("add", "\u00e9.py")
+        self.git("update-index", "--skip-worktree", "\u00e9.py")
+        before = self.fingerprint()
+        (self.repo / "\u00e9.py").write_text("two\n")
+        self.assertNotEqual(self.fingerprint(), before)
+
+    def test_an_edit_to_a_flagged_file_whose_name_starts_with_a_dash_changes_it(self):
+        (self.repo / "-x.py").write_text("one\n")
+        self.git("add", "--", "-x.py")
+        self.git("update-index", "--skip-worktree", "--", "-x.py")
+        before = self.fingerprint()
+        (self.repo / "-x.py").write_text("two\n")
+        self.assertNotEqual(self.fingerprint(), before)
+
+    def test_a_repo_with_no_flagged_file_has_the_fingerprint_of_the_command_before_flags_were_read(self):
+        old = ('cd "$(git rev-parse --show-toplevel)" && (git diff --no-ext-diff --no-textconv --no-color "$BASE" -- . '
+               "':!.sdlc'; git ls-files -o --exclude-standard -z -- . ':!.sdlc' | xargs -0 shasum -a 256) | shasum -a 256")
+        out = subprocess.run(["bash", "-c", old], cwd=self.repo, capture_output=True, text=True, timeout=30,
+                             env={**os.environ, "BASE": self.base})
+        self.assertEqual(self.fingerprint(), out.stdout)
 
     def test_files_under_sdlc_do_not_change_it(self):
         before = self.fingerprint()

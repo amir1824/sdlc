@@ -100,8 +100,11 @@ def snyk_scan_allowed(data: dict, call: tuple) -> bool:
 
 
 def on_snyk_seen(data: dict) -> None:
-    """PostToolUse and PostToolUseFailure: record a Snyk scan of this project in the project's state."""
-    load_sibling("snyk/record").record_scan(snyk_host(), data)
+    """PostToolUse and PostToolUseFailure: record a Snyk scan of this project in the project's state, and when Snyk is
+    required say the Security gate's verdict on the code as it is now (to the model, and to the owner)."""
+    line = load_sibling("snyk/record").record_scan(snyk_host(), data)
+    if line:
+        emit(str(data.get("hook_event_name") or "PostToolUse"), system_message=line, additionalContext=f"{SNYK_TAG}{line}")
 
 
 def pin_snyk_base(root: Path) -> None:
@@ -109,6 +112,15 @@ def pin_snyk_base(root: Path) -> None:
         load_sibling("snyk/record").pin_base(snyk_host(), root)
     except Exception:  # a failed pin must not stop an approval; the gate then reports the change as unknown
         return
+
+
+def clear_snyk_accepted(root: Path) -> str:
+    """At a plan approval: the owner's accepted findings end. The sentence for the approval notice, or "" when none."""
+    try:
+        cleared = load_sibling("snyk/record").reset_accepted(snyk_host(), root)
+    except Exception:  # a failed clear must not stop an approval, so the owner is told the old acceptances still stand
+        return "The accepted Snyk findings could not be cleared and still stand: check them. "
+    return f"{cleared} accepted Snyk finding(s) cleared: accept again what still applies. " if cleared else ""
 
 
 def on_snyk_command(data: dict, text: str) -> None:

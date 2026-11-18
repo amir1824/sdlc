@@ -45,6 +45,18 @@ class TreeHashTest(GitRepoTest):
     def test_the_same_code_gives_the_same_hash(self):
         self.assertEqual(tree.tree_hash(self.root), tree.tree_hash(self.root))
 
+    def test_an_edit_to_a_skip_worktree_file_changes_it(self):
+        self.git("update-index", "--skip-worktree", "a.py")
+        before = tree.tree_hash(self.root)
+        (self.root / "a.py").write_text("x = 2\n")
+        self.assertNotEqual(tree.tree_hash(self.root), before)
+
+    def test_an_edit_to_an_assume_unchanged_file_changes_it(self):
+        self.git("update-index", "--assume-unchanged", "a.py")
+        before = tree.tree_hash(self.root)
+        (self.root / "a.py").write_text("x = 2\n")
+        self.assertNotEqual(tree.tree_hash(self.root), before)
+
     def test_an_edit_to_a_tracked_file_changes_it(self):
         before = tree.tree_hash(self.root)
         (self.root / "a.py").write_text("x = 2\n")
@@ -79,6 +91,13 @@ class TreeHashTest(GitRepoTest):
     def test_a_budget_that_is_spent_gives_no_hash_and_says_why(self):
         with self.assertRaisesRegex(tree.TreeUnavailable, "time budget spent"):
             tree.tree_hash(self.root, tree.Budget(0))
+
+    def test_a_budget_that_runs_out_while_empty_flagged_files_are_hashed_gives_no_hash(self):
+        self.git("update-index", "--skip-worktree", "a.py")
+        (self.root / "a.py").write_text("")
+        with mock.patch.object(tree.Budget, "seconds_left", side_effect=itertools.chain([5.0] * 4, itertools.repeat(0.0))):
+            with self.assertRaisesRegex(tree.TreeUnavailable, "while hashing"):
+                tree.tree_hash(self.root)
 
     def test_a_budget_that_runs_out_after_git_while_links_are_hashed_gives_no_hash(self):
         (self.root / "pad.bin").symlink_to("/dev/zero")
@@ -115,6 +134,77 @@ class ChangedFilesTest(GitRepoTest):
     def test_a_deleted_file_is_listed(self):
         (self.root / "a.py").unlink()
         self.assertEqual(tree.changed_files(self.root, self.head()), ["a.py"])
+
+    def test_an_edited_skip_worktree_file_is_listed(self):
+        self.git("update-index", "--skip-worktree", "a.py")
+        (self.root / "a.py").write_text("x = 2\n")
+        self.assertEqual(tree.changed_files(self.root, self.head()), ["a.py"])
+
+    def test_an_edited_assume_unchanged_file_is_listed(self):
+        self.git("update-index", "--assume-unchanged", "a.py")
+        (self.root / "a.py").write_text("x = 2\n")
+        self.assertEqual(tree.changed_files(self.root, self.head()), ["a.py"])
+
+    def test_a_skip_worktree_file_equal_to_the_base_is_not_listed(self):
+        self.git("update-index", "--skip-worktree", "a.py")
+        self.assertEqual(tree.changed_files(self.root, self.head()), [])
+
+    def test_a_flagged_file_replaced_by_a_link_to_a_device_is_listed_without_being_read(self):
+        self.git("update-index", "--assume-unchanged", "a.py")
+        (self.root / "a.py").unlink()
+        (self.root / "a.py").symlink_to("/dev/zero")
+        self.assertEqual(tree.changed_files(self.root, self.head()), ["a.py"])
+
+    def flagged_link(self, target="a.py"):
+        (self.root / "link.py").symlink_to(target)
+        self.git("add", "link.py")
+        self.git("commit", "-q", "-m", "link")
+        self.git("update-index", "--assume-unchanged", "link.py")
+
+    def test_a_flagged_link_equal_to_the_base_is_not_listed(self):
+        self.flagged_link()
+        self.assertEqual(tree.changed_files(self.root, self.head()), [])
+
+    def test_a_flagged_link_that_now_points_elsewhere_is_listed(self):
+        self.flagged_link()
+        (self.root / "link.py").unlink()
+        (self.root / "link.py").symlink_to("/etc/hosts")
+        self.assertEqual(tree.changed_files(self.root, self.head()), ["link.py"])
+
+    def test_a_flagged_file_that_vanishes_before_it_is_compared_counts_as_changed(self):
+        self.assertEqual(tree.differing_files(self.root, self.head(), ["gone.py"], tree.new_budget()), {"gone.py"})
+
+    def test_a_file_name_with_a_line_break_counts_as_changed_without_being_sent_to_git(self):
+        (self.root / "odd\nname.py").write_text("x = 1\n")
+        self.assertEqual(tree.differing_files(self.root, self.head(), ["odd\nname.py"], tree.new_budget()),
+                         {"odd\nname.py"})
+
+    def git_calls(self, work):
+        with mock.patch.object(tree.subprocess, "run", wraps=tree.subprocess.run) as run:
+            work()
+        return [call.args[0][1:] for call in run.call_args_list]
+
+    def test_many_flagged_files_are_compared_in_two_git_calls(self):
+        names = [f"m{number}.py" for number in range(5)]
+        for name in names:
+            (self.root / name).write_text("x = 1\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "more")
+        (self.root / "m3.py").write_text("x = 2\n")
+        head = self.head()
+        calls = self.git_calls(lambda: tree.differing_files(self.root, head, names, tree.new_budget()))
+        self.assertEqual([call[0] for call in calls], ["hash-object", "cat-file"])
+
+    def test_the_flagged_files_are_listed_once_for_a_hash_and_a_change_list_on_one_budget(self):
+        self.git("update-index", "--assume-unchanged", "a.py")
+        budget, head = tree.new_budget(), self.head()
+        calls = self.git_calls(lambda: (tree.tree_hash(self.root, budget), tree.changed_files(self.root, head, budget)))
+        self.assertEqual(sum("-v" in call for call in calls), 1)
+
+    def test_a_skip_worktree_file_that_is_absent_is_not_listed(self):
+        self.git("update-index", "--skip-worktree", "a.py")
+        (self.root / "a.py").unlink()
+        self.assertEqual(tree.changed_files(self.root, self.head()), [])
 
     def test_a_renamed_file_is_listed_under_both_names(self):
         self.git("mv", "a.py", "c.py")

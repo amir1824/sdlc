@@ -8,7 +8,7 @@ from pathlib import Path
 from sdlc_hooks.core.project import canonical, project_root, protected, written_relative
 from sdlc_hooks.core.session import UNLOCK_WORDS, agent_name, session_file, session_gated, state_dir
 from sdlc_hooks.plan.approval import approved_scope, changed_plans
-from sdlc_hooks.plan.frozen_tests import TESTS_WRITER, approved_tests, frozen_key, frozen_keys
+from sdlc_hooks.plan.frozen_tests import TESTS_WRITER, approved_tests, frozen_matches
 from sdlc_hooks.plan.scope import glob_match
 
 SCOPE_TAG = "sdlc-gate: [scope] "
@@ -62,10 +62,10 @@ def frozen_reason(data: dict, spellings: list[str]) -> str:
     paths = approved_tests(data)
     if paths is None:
         return ""
-    frozen = frozen_keys(project_root(data), paths)
-    hit = next((spelling for spelling in spellings if frozen_key(spelling) in frozen), None)
-    if hit is None or agent_name(data) == TESTS_WRITER:
+    matches = frozen_matches(project_root(data), spellings, paths)
+    if not matches or agent_name(data) == TESTS_WRITER:
         return ""
+    hit = matches[0][1]
     return (f"{TESTS_TAG}{hit} is a frozen reproduction test of the approved plan, and only {TESTS_WRITER} may "
             f"edit it; this call came from {agent_name(data) or 'the main session'}. If the test is wrong, report "
             f"it and leave it: changing it needs an amended plan.md and the owner's `approve plan`. If you are "
@@ -98,7 +98,10 @@ def file_edit_reason(data: dict, file_path: str) -> str:
         return "sdlc-gate: the gate's state belongs to the owner; do not edit it."
     written = written_relative(data, file_path)
     if os.path.commonpath([target, root]) != root:
-        return (scope_reason(data, None) or strict_frozen_reason(data, [written])) if written is not None else ""
+        # outside the project nothing is scoped, but a hard link made there to a frozen test is still that test; a path
+        # the gate cannot place in the project is never gated when the check fails (the entry's promise)
+        return (scope_reason(data, None) or strict_frozen_reason(data, [written])) if written is not None \
+            else lenient_frozen_reason(data, [file_path])
     relative = Path(target).relative_to(root)
     spellings = [name for name in (relative.as_posix(), written) if name]
     if relative.parts[:1] == (".sdlc",):

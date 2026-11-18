@@ -37,6 +37,13 @@ LEAN_RUN = (
 )
 
 
+HIGH_VERIFIED = FULL_RUN.replace("risk: MEDIUM", "risk: HIGH").replace("waiting: Verify\n", "6 Verify: done\nwaiting: Ship\n")
+RUN_TABLE_HEADER = "| id | command | exit | fingerprint | started (ISO) | output | covers |\n|---|---|---|---|---|---|---|\n"
+REVIEW_WITH_A_RUN = "# Review\n\n## Test runs\n\n" + RUN_TABLE_HEADER + "| T1 | pytest | 0 | abc | 2026-11-18T10:00:00 | ok | R1 |\n"
+REVIEW_WITH_AN_EMPTY_TABLE = "# Review\n\n## Test runs\n\n" + RUN_TABLE_HEADER
+REVIEW_WITH_NO_RUNS_SECTION = "# Review\n\nAll checks passed.\n"
+
+
 def write_files(folder, names):
     for name in names:
         (folder / name).write_text(PLAN_TEXT)
@@ -63,6 +70,13 @@ class StatusCheckTest(unittest.TestCase):
     def hook_event(self, path):
         return json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(path)}})
 
+    def check_review(self, review_text, text=HIGH_VERIFIED, files=FULL_FILES):
+        write_files(self.run_folder, files)
+        (self.run_folder / "review.md").write_text(review_text)
+        self.status.write_text(text)
+        return subprocess.run([sys.executable, "-I", str(SCRIPT), "check", str(self.status)],
+                              capture_output=True, text=True, timeout=10)
+
     def test_a_valid_full_run_has_no_findings(self):
         result = self.check(FULL_RUN)
         self.assertEqual((result.returncode, result.stdout), (0, ""))
@@ -83,6 +97,34 @@ class StatusCheckTest(unittest.TestCase):
     def test_a_stage_with_two_lines_is_reported(self):
         result = self.check(FULL_RUN.replace("4 Plan: done\n", "4 Plan: done\n4 Plan: done\n"))
         self.assertIn("stage 4 Plan has more than one line", result.stdout)
+
+    def test_a_done_stage_after_one_that_is_still_running_is_reported(self):
+        result = self.check(FULL_RUN.replace("2 Define: done", "2 Define: running"))
+        self.assertIn("stage 4 Plan is done but stage 2 Define is running", result.stdout)
+
+    def test_a_running_stage_after_a_pending_one_is_reported(self):
+        result = self.check(FULL_RUN.replace("4 Plan: done\n5 Build: done", "4 Plan: pending\n5 Build: running"))
+        self.assertIn("stage 5 Build is running but stage 4 Plan is pending", result.stdout)
+
+    def test_a_blocked_build_after_a_plan_sent_back_by_a_failed_spike_is_not_reported(self):
+        text = FULL_RUN.replace("4 Plan: done\n5 Build: done\nwaiting: Verify",
+                                "4 Plan: running - S1 failed\n5 Build: blocked - S1 failed\nwaiting: owner")
+        self.assertEqual(self.check(text).stdout, "")
+
+    def test_a_high_run_with_verify_done_and_no_test_run_row_is_reported(self):
+        result = self.check_review(REVIEW_WITH_AN_EMPTY_TABLE)
+        self.assertIn("stage 6 Verify is done but review.md has no row under Test runs (HIGH risk)", result.stdout)
+
+    def test_a_high_run_whose_review_has_no_test_runs_section_is_reported(self):
+        result = self.check_review(REVIEW_WITH_NO_RUNS_SECTION)
+        self.assertIn("review.md has no row under Test runs (HIGH risk)", result.stdout)
+
+    def test_a_high_run_with_a_test_run_row_has_no_findings(self):
+        self.assertEqual(self.check_review(REVIEW_WITH_A_RUN).stdout, "")
+
+    def test_a_medium_run_needs_no_test_run_row_to_finish_verify(self):
+        text = HIGH_VERIFIED.replace("risk: HIGH", "risk: MEDIUM")
+        self.assertEqual(self.check_review(REVIEW_WITH_NO_RUNS_SECTION, text).stdout, "")
 
     def test_stage_lines_out_of_order_are_reported(self):
         result = self.check(FULL_RUN.replace("2 Define: done\n3 Design: skipped - no UI\n", "3 Design: skipped - no UI\n2 Define: done\n"))
@@ -154,7 +196,7 @@ class StatusCheckTest(unittest.TestCase):
 
     def test_a_high_risk_lean_run_may_ship(self):
         text = LEAN_RUN.replace("risk: LOW", "risk: HIGH").replace("7 Ship: skipped - lean path", "7 Ship: done")
-        result = self.check(text, files=("plan.md", "build.md", "review.md", "release.md", "retro.md"))
+        result = self.check_review(REVIEW_WITH_A_RUN, text, files=("plan.md", "build.md", "release.md", "retro.md"))
         self.assertEqual(result.stdout, "")
 
     def test_a_low_risk_lean_run_that_ships_is_reported(self):
@@ -168,6 +210,14 @@ class StatusCheckTest(unittest.TestCase):
 
     def test_a_bad_risk_is_reported(self):
         self.assertIn("header: risk `SEVERE` is not LOW, MEDIUM or HIGH", self.check(FULL_RUN.replace("MEDIUM", "SEVERE")).stdout)
+
+    def test_an_intake_result_that_is_not_one_of_the_four_is_reported(self):
+        result = self.check(FULL_RUN.replace("path: full\n", "path: full\nintake: MAYBE\n"))
+        self.assertIn("header: intake `MAYBE` is not READY, NEEDS_INFO, RESCOPE_PROPOSED or REJECTED", result.stdout)
+
+    def test_an_intake_result_of_the_four_has_no_findings(self):
+        result = self.check(FULL_RUN.replace("path: full\n", "path: full\nintake: RESCOPE_PROPOSED\n"))
+        self.assertEqual(result.stdout, "")
 
     def test_a_bad_path_is_reported(self):
         self.assertIn("header: path `quick` is not full or lean", self.check(FULL_RUN.replace("path: full", "path: quick")).stdout)
@@ -255,6 +305,52 @@ class StatusCheckTest(unittest.TestCase):
 
 def limit_in(path, name):
     return int(re.search(rf"^{name} = ([0-9_]+)", path.read_text(), re.MULTILINE).group(1).replace("_", ""))
+
+
+class FingerprintCommandTest(unittest.TestCase):
+    """`status_check.py fingerprint <status.md>` prints what the block under `### Fingerprint` in sdlc.md prints, with
+    the header's `base:`."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.repo)
+        self.git("init", "-q")
+        (self.repo / "a.txt").write_text("one\n")
+        self.git("add", "a.txt")
+        self.git("commit", "-q", "-m", "base")
+        self.run_folder = self.repo / ".sdlc" / "slugify"
+        self.run_folder.mkdir(parents=True)
+        self.status = self.run_folder / "status.md"
+        self.status.write_text(f"run: slugify\nrisk: LOW\npath: lean\nbase: {self.git('rev-parse', 'HEAD').strip()}\n")
+
+    def git(self, *args):
+        identity = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        return subprocess.run(["git", *identity, *args], cwd=self.repo, capture_output=True, text=True,
+                              check=True, timeout=30).stdout
+
+    def fingerprint(self):
+        return subprocess.run([sys.executable, "-I", str(SCRIPT), "fingerprint", str(self.status)],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_it_prints_one_sha256_line(self):
+        done = self.fingerprint()
+        self.assertEqual((done.returncode, bool(re.fullmatch(r"[0-9a-f]{64}  -\n", done.stdout))), (0, True))
+
+    def test_an_edit_changes_it(self):
+        before = self.fingerprint().stdout
+        (self.repo / "a.txt").write_text("two\n")
+        self.assertNotEqual(self.fingerprint().stdout, before)
+
+    def test_an_edit_to_a_skip_worktree_file_changes_it(self):
+        self.git("update-index", "--skip-worktree", "a.txt")
+        before = self.fingerprint().stdout
+        (self.repo / "a.txt").write_text("two\n")
+        self.assertNotEqual(self.fingerprint().stdout, before)
+
+    def test_a_status_with_no_base_exits_2_and_says_why(self):
+        self.status.write_text("run: slugify\nrisk: LOW\npath: lean\n")
+        done = self.fingerprint()
+        self.assertEqual((done.returncode, "base:" in done.stderr), (2, True))
 
 
 class WiringTest(unittest.TestCase):

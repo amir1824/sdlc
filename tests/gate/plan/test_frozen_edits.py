@@ -2,9 +2,18 @@
 
 Run: python3 -I -m unittest discover -s tests
 """
+import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from support.frozen_base import BUILDER, FrozenGateTest, QA
+from support.paths import HOOKS
+
+sys.path.append(str(HOOKS))
+from sdlc_hooks.plan import frozen_tests  # noqa: E402
 
 
 class EditTest(FrozenGateTest):
@@ -95,6 +104,37 @@ class EditTest(FrozenGateTest):
         (self.project / "alias.py").symlink_to(self.frozen)
         self.frozen_denial(self.edit_as(self.project / "alias.py", BUILDER))
 
+    def test_a_hard_link_made_later_for_a_frozen_test_is_the_same_file(self):
+        self.approve_frozen()
+        self.frozen.parent.mkdir()
+        self.frozen.write_text("def test_bug(): assert False\n")
+        os.link(self.frozen, self.project / "alias.py")
+        self.frozen_denial(self.edit_as(self.project / "alias.py", BUILDER))
+
+    def test_a_hard_link_made_outside_the_project_is_the_same_file(self):
+        self.approve_frozen()
+        self.frozen.parent.mkdir()
+        self.frozen.write_text("def test_bug(): assert False\n")
+        os.link(self.frozen, self.tmp / "outside.py")
+        self.frozen_denial(self.edit_as(self.tmp / "outside.py", BUILDER))
+
+    def test_a_record_that_cannot_be_read_does_not_gate_a_file_outside_the_project(self):
+        self.approve_frozen()
+        self.tamper({"paths": [7]})
+        self.assertEqual(self.edit_as(self.tmp / "elsewhere.py", BUILDER).stdout, "")
+
+    def test_a_file_that_only_has_the_same_text_as_a_frozen_test_stays_editable(self):
+        self.approve_frozen()
+        self.frozen.parent.mkdir()
+        self.frozen.write_text("def test_bug(): assert False\n")
+        (self.project / "copy.py").write_text("def test_bug(): assert False\n")
+        self.assertEqual(self.edit_as(self.project / "copy.py", BUILDER).stdout, "")
+
+    def test_a_frozen_test_that_does_not_exist_yet_leaves_every_other_edit_alone(self):
+        self.approve_frozen()
+        (self.project / "copy.py").write_text("x = 1\n")
+        self.assertEqual(self.edit_as(self.project / "copy.py", BUILDER).stdout, "")
+
     def test_the_denial_names_the_way_to_change_a_frozen_test(self):
         self.approve_frozen()
         reason = self.reason(self.edit_as(self.frozen, BUILDER))
@@ -116,6 +156,22 @@ class EditTest(FrozenGateTest):
         self.frozen_denial(self.edit_as(self.frozen, BUILDER))
         self.prompt("sdlc off")
         self.assertEqual(self.edit_as(self.frozen, BUILDER).stdout, "")
+
+
+class FileIdTest(unittest.TestCase):
+    def test_two_names_of_one_file_have_the_same_id(self):
+        with tempfile.TemporaryDirectory() as folder:
+            first = Path(folder, "a.py")
+            first.write_text("x = 1\n")
+            os.link(first, Path(folder, "b.py"))
+            self.assertEqual(frozen_tests.file_id(first), frozen_tests.file_id(Path(folder, "b.py")))
+
+    def test_a_path_that_cannot_be_stat_ed_has_no_id(self):
+        with mock.patch.object(frozen_tests.os, "stat", side_effect=PermissionError("no")):
+            self.assertIsNone(frozen_tests.file_id(Path("/anywhere/a.py")))
+
+    def test_a_file_that_does_not_exist_has_no_id(self):
+        self.assertIsNone(frozen_tests.file_id(Path("/no/such/file.py")))
 
 
 if __name__ == "__main__":

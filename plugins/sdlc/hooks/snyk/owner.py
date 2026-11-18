@@ -77,7 +77,7 @@ def accept_finding(host, context: OwnerCommand, words: str) -> None:
     if not found:
         return host.say(f"{args[0]} is not a finding of the current scans.\n{gate.report(listed)}")
     state, reason = context.state, args[1][:REASON_MAX]
-    state["accepted"] = unique_strings([*unique_strings(state["accepted"]), found[0]["id"]])
+    state["accepted"] = unique_strings([*unique_strings(state["accepted"]), found[0]["key"]])
     append_owner_log(state, {"at": host.now(), "verb": "accept", "reason": reason, "finding": found[0]["id"]})
     host.write_state(context.root, state)
     host.log_event(context.data, "snyk-accept", f"{args[0]} {reason}")

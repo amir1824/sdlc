@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 
 from sdlc_hooks.core.audit import log_event, now
@@ -14,7 +15,18 @@ from sdlc_hooks.core.session import session_file
 from sdlc_hooks.jira.markers import NO_KEY, intake_pending, jira_label
 from sdlc_hooks.plan.frozen_tests import TESTS_BLOCK, TESTS_WRITER, frozen_key, has_block, parse_tests, previous_tests
 from sdlc_hooks.plan.scope import SCOPE_BLOCK, parse_scope
-from sdlc_hooks.snyk_gate import pin_snyk_base
+from sdlc_hooks.snyk_gate import clear_snyk_accepted, pin_snyk_base
+
+GATE_SCRIPT = Path(__file__).resolve().parents[2] / "sdlc_gate.py"  # the entry a reviewer runs for `frozen-status`
+
+
+def record_frozen_baseline(root: Path, tests: list[str]) -> None:
+    try:
+        from sdlc_hooks.plan.frozen_seen import record_approved_tests  # here: frozen_seen needs files.checks, which needs this module
+        record_approved_tests(root, tests)
+    except Exception:  # noqa: BLE001 - advisory: no baseline is recorded, and `frozen-status` then says NO BASELINE
+        return
+
 
 def plan_sources(root: Path) -> dict[str, bytes]:
     """Each .sdlc/*/plan.md as read once: its path relative to the project, and its bytes."""
@@ -75,6 +87,7 @@ def tests_notice(before: list[str], tests: list[str] | None) -> str:
         parts.append(f"NO LONGER FROZEN since the last approval: {', '.join(removed)}.")
     if now_frozen:
         parts.append(f"Frozen tests, which only {TESTS_WRITER} may edit: {', '.join(now_frozen)}.")
+        parts.append(f"To see whether one was changed outside the file tools, run `python3 -I {shlex.quote(str(GATE_SCRIPT))} frozen-status`.")
     if added:
         parts.append(f"Newly frozen since the last approval: {', '.join(added)}.")
     return "".join(f"{part} " for part in parts)
@@ -131,7 +144,8 @@ def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None 
     approved.write_text(json.dumps(record))
     lock.unlink(missing_ok=True)
     pin_snyk_base(root)
-    announce_approval(line, record, frozen_notice)
+    record_frozen_baseline(root, tests or [])
+    announce_approval(line, record, frozen_notice + clear_snyk_accepted(root))
 
 
 def intake_start_note(key: str) -> str:

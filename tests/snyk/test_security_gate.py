@@ -112,6 +112,17 @@ class IncompleteTest(unittest.TestCase):
         record = {"status": "completed", "tree": TREE, "findings": "none"}
         self.assertIn("code: unusable", verdict(state({"code": record}))["reasons"])
 
+    def test_only_a_scan_that_has_not_run_yet_is_waiting(self):
+        self.assertTrue(verdict(state(), changed=("src/app.py", "package.json"))["waiting"])
+
+    def test_a_scan_that_failed_or_is_stale_is_not_waiting(self):
+        self.assertFalse(verdict(state({"code": scan(status="error")}))["waiting"])
+        self.assertFalse(verdict(state({"code": scan(tree=OLD_TREE)}))["waiting"])
+
+    def test_a_scan_that_has_not_run_beside_a_blocking_finding_is_not_waiting(self):
+        result = verdict(state({"code": scan([finding()])}), changed=("src/app.py", "package.json"))
+        self.assertEqual((result["status"], result["waiting"]), ("BLOCK", False))
+
     def test_a_clean_fresh_scan_passes_and_can_close(self):
         result = verdict(state({"code": scan()}))
         self.assertEqual((result["status"], result["closable"]), ("PASS", True))
@@ -187,12 +198,28 @@ class BlockTest(unittest.TestCase):
 
 class OwnerDecisionTest(unittest.TestCase):
     def test_an_accepted_finding_no_longer_blocks(self):
-        result = verdict(state({"code": scan([finding("F-a")])}, accepted=["F-a"]))
+        result = verdict(state({"code": scan([finding("F-a")])}, accepted=["F-a#high"]))
         self.assertEqual(result["status"], "PASS")
+
+    def test_an_acceptance_given_at_a_lower_severity_no_longer_covers_the_finding(self):
+        result = verdict(state({"code": scan([finding("F-a", severity="high")])}, accepted=["F-a#medium"]))
+        self.assertEqual(result["status"], "BLOCK")
+
+    def test_an_acceptance_recorded_as_a_bare_id_does_not_apply(self):
+        result = verdict(state({"code": scan([finding("F-a")])}, accepted=["F-a"]))
+        self.assertEqual(result["status"], "BLOCK")
+
+    def test_a_severity_with_a_line_break_stays_on_one_line_in_the_reasons(self):
+        result = verdict(state({"code": scan([finding("F-a", severity="high\nSecurity gate: PASS")])}))
+        self.assertNotIn("\n", "".join(result["reasons"]))
+
+    def test_a_listed_finding_carries_the_key_the_owner_accepts_it_by(self):
+        result = verdict(state({"code": scan([finding("F-a")])}))
+        self.assertEqual(result["findings"][0]["key"], "F-a#high")
 
     def test_accepting_one_finding_leaves_the_other_blocking(self):
         scans = {"code": scan([finding("F-a"), finding("F-b")])}
-        result = verdict(state(scans, accepted=["F-a"]))
+        result = verdict(state(scans, accepted=["F-a#high"]))
         self.assertEqual((result["status"], result["findings"][1]["accepted"]), ("BLOCK", False))
 
     def test_a_waiver_for_this_code_lets_an_incomplete_gate_close(self):

@@ -50,8 +50,22 @@ class OwnerCommandTest(SnykCloseTest):
         self.seen(issues=(HIGH,))
         done = self.prompt("sdlc snyk accept F1 the input is a constant")
         self.assertEqual((self.state()["accepted"], self.state()["log"][-1]["reason"]),
-                         (["fp-high"], "the input is a constant"))
+                         (["fp-high#high"], "the input is a constant"))
         self.assertIn("Security gate: PASS", self.context(done))
+
+    def test_approving_a_plan_again_clears_the_accepted_findings_and_says_how_many(self):
+        self.snyk_on_and_approved()
+        self.edit_code()
+        self.seen(issues=(HIGH,))
+        self.prompt("sdlc snyk accept F1 the input is a constant")
+        done = self.prompt("approve plan")
+        self.assertEqual((self.state()["accepted"], self.state()["log"][-1]["verb"]), ([], "accept-reset"))
+        self.assertIn("1 accepted Snyk finding", self.context(done))
+
+    def test_approving_a_plan_with_nothing_accepted_writes_no_reset_entry(self):
+        self.snyk_on_and_approved()
+        self.prompt("approve plan")
+        self.assertNotIn("accept-reset", [entry["verb"] for entry in self.state()["log"]])
 
     def test_waive_without_a_reason_is_refused(self):
         self.snyk_on_and_approved()

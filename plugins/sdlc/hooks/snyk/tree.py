@@ -4,9 +4,11 @@ The hash and the list share one Budget (3.5 seconds, below the 5-second hook tim
 and 256 MiB of untracked content): a budget that runs out, or git failing, raises TreeUnavailable with the reason,
 which `collect` turns into the gate's "not hashed" or "change unknown" plus that reason, never into a pass. A symlink is hashed as its target's name, and a device or pipe is never opened, so
 `ln -s /dev/zero pad` cannot hold the hook.
-ponytail: the hash does not see a dirty submodule's content, a nested git repo, files marked assume-unchanged or
-skip-worktree, paths hidden by .git/info/exclude, or what a tracked symlink points at; the upgrade is `git submodule
-status` and `git ls-files -v` in the hash input. It is taken after the scan, so code changed during a scan is in it.
+A tracked file marked assume-unchanged or skip-worktree is hashed by its content (a link by its target), and listed as
+changed when it differs from the base (`git diff` never shows an edit of one).
+ponytail: the hash does not see a dirty submodule's content, a nested git repo, paths hidden by .git/info/exclude,
+or what a tracked symlink points at; the upgrade is `git submodule status` in the hash input. It is taken after the
+scan, so code changed during a scan is in it.
 """
 from __future__ import annotations
 
@@ -33,11 +35,13 @@ class TreeUnavailable(Exception):
 
 
 class Budget:
-    """Time and bytes one hook run may spend on git and on reading files."""
+    """Time and bytes one hook run may spend on git and on reading files, and what that run reads once: the listing of
+    flagged files, because the code does not change while one hook run is going. Never reuse one across runs."""
 
     def __init__(self, seconds: float, max_bytes: int = MAX_HASH_BYTES):
         self.end = time.monotonic() + seconds
         self.bytes_left = max_bytes
+        self.flagged: list[str] | None = None  # the listing of flagged files, read once per run
 
     def seconds_left(self) -> float:
         return self.end - time.monotonic()
@@ -52,12 +56,12 @@ def new_budget() -> Budget:
     return Budget(HOOK_BUDGET_SECONDS)
 
 
-def run_git(root: Path, *args: str, budget: Budget | None = None) -> bytes:
+def run_git(root: Path, *args: str, budget: Budget | None = None, stdin: bytes | None = None) -> bytes:
     seconds = min(GIT_SECONDS, (budget or Budget(GIT_SECONDS)).seconds_left())
     if seconds <= 0:
         raise TreeUnavailable("time budget spent")
     try:
-        return subprocess.run(["git", *args], cwd=root, capture_output=True, timeout=seconds, check=True).stdout
+        return subprocess.run(["git", *args], cwd=root, capture_output=True, timeout=seconds, check=True, input=stdin).stdout
     except subprocess.TimeoutExpired:
         raise TreeUnavailable(f"git {args[0]} timed out") from None
     except (OSError, subprocess.SubprocessError):
@@ -90,6 +94,54 @@ def entry_digest(path: Path, budget: Budget) -> bytes:
     return file_digest(path, budget) if stat.S_ISREG(mode) else b"special"
 
 
+def flagged_files(root: Path, budget: Budget) -> list[str]:
+    """Tracked files git was told not to look at (assume-unchanged shows as a lowercase tag, skip-worktree as `S`)
+    that are on disk: `git diff` and `git status` never list an edit of one."""
+    if budget.flagged is None:
+        listing = run_git(root, "ls-files", "-v", "-z", "--", ".", RUN_FOLDER_PATHSPEC, budget=budget)
+        flagged = (os.fsdecode(entry[2:]) for entry in listing.split(b"\0") if entry[:1].islower() or entry[:1] == b"S")
+        budget.flagged = sorted(name for name in flagged if os.path.lexists(root / name))
+    return budget.flagged
+
+
+def current_hashes(root: Path, names: list[str], budget: Budget) -> dict[str, bytes]:
+    """The blob hash each of `names` would have: a regular file by its content (one git call for all), a link by its
+    target's text (one call each, from stdin: `git hash-object` on the path would follow it). Anything else, a name with a
+    line break (the line protocol of git cannot carry it) and a file gone since it was listed has no hash."""
+    kinds: dict[str, list[str]] = {"file": [], "link": []}
+    for name in names:
+        try:
+            mode = os.lstat(root / name).st_mode
+        except OSError:
+            continue
+        if "\n" not in name and (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+            kinds["file" if stat.S_ISREG(mode) else "link"].append(name)
+    found = {}
+    if kinds["file"]:
+        hashes = run_git(root, "hash-object", "--stdin-paths", budget=budget, stdin=os.fsencode("\n".join(kinds["file"]))).split()
+        if len(hashes) != len(kinds["file"]):
+            raise TreeUnavailable("git hash-object gave an answer of the wrong length")
+        found.update(zip(kinds["file"], hashes))
+    for name in kinds["link"]:
+        found[name] = run_git(root, "hash-object", "--stdin", budget=budget, stdin=os.fsencode(os.readlink(root / name))).strip()
+    return found
+
+
+def differing_files(root: Path, base: str, names: list[str], budget: Budget) -> set[str]:
+    """The files among `names` that are not the blob `base` holds (a file `base` lacks differs), in two git calls for
+    the regular files. A device, a pipe, a file gone since it was listed and a name with a line break differ without being
+    opened (`git hash-object` would follow a link to `/dev/zero` until the budget ran out)."""
+    current = current_hashes(root, names, budget)
+    if not current:
+        return set(names)
+    in_base = run_git(root, "cat-file", "--batch-check", budget=budget,
+                      stdin=os.fsencode("".join(f"{base}:./{name}\n" for name in current))).splitlines()
+    if len(in_base) != len(current):
+        raise TreeUnavailable("git cat-file gave an answer of the wrong length")
+    same = {name for (name, now), held in zip(current.items(), in_base) if held.split()[:2] == [now, b"blob"]}
+    return set(names) - same
+
+
 def head_commit(root: Path) -> str:
     """The hash of HEAD; TreeUnavailable when there is no repo or no commit."""
     return run_git(root, "rev-parse", "HEAD").decode().strip()
@@ -108,6 +160,10 @@ def tree_hash(root: Path, budget: Budget | None = None) -> str:
         if budget.seconds_left() <= 0:
             raise TreeUnavailable(HASHING_BUDGET_SPENT)
         digest.update(name + b"\0" + entry_digest(root / os.fsdecode(name), budget))
+    for name in flagged_files(root, budget):
+        if budget.seconds_left() <= 0:
+            raise TreeUnavailable(HASHING_BUDGET_SPENT)
+        digest.update(b"flagged\0" + os.fsencode(name) + b"\0" + entry_digest(root / name, budget))
     return digest.hexdigest()
 
 
@@ -122,7 +178,8 @@ def changed_files(root: Path, base: object, budget: Budget | None = None) -> lis
                       RUN_FOLDER_PATHSPEC, budget=budget)
     untracked = run_git(root, "ls-files", "-o", "--exclude-standard", "-z", "--", ".", RUN_FOLDER_PATHSPEC,
                         budget=budget)
-    return sorted({os.fsdecode(name) for name in (tracked + b"\0" + untracked).split(b"\0") if name})
+    listed = {os.fsdecode(name) for name in (tracked + b"\0" + untracked).split(b"\0") if name}
+    return sorted(listed | differing_files(root, base, flagged_files(root, budget), budget))
 
 
 def collect(root: Path, base: object, budget: Budget) -> tuple[list[str] | None, str | None, tuple[str, ...]]:

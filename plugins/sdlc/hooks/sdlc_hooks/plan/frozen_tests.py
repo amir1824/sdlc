@@ -93,6 +93,28 @@ def approved_tests(data: dict) -> list[str] | None:
     return paths
 
 
+def file_id(path: Path) -> tuple[int, int] | None:
+    """Which file `path` is (device and inode, so two names of one file agree); None when no file can be stat'ed there."""
+    try:
+        info = os.stat(path)
+    except OSError:  # no such file, or a folder on the way that cannot be searched: not a file we can match
+        return None
+    return info.st_dev, info.st_ino
+
+
+def frozen_matches(root: Path, spellings: list[str], paths: list[str]) -> list[tuple[str, str]]:
+    """(the plan's own spelling of a frozen test, the spelling that names it) for each of `spellings` that is a frozen
+    test: the same path in any case, through a symlink, or a hard link (a second name for the same file, made after the
+    approval). Each frozen path and each spelling is resolved and stat'ed once."""
+    ids = {spelling: file_id(root / spelling) for spelling in spellings}
+    found = []
+    for path in paths:
+        keys, frozen = frozen_keys(root, [path]), file_id(root / path)
+        found += [(path, spelling) for spelling in spellings
+                  if frozen_key(spelling) in keys or (frozen is not None and ids[spelling] == frozen)]
+    return found
+
+
 def frozen_keys(root: Path, paths: list[str]) -> set[str]:
     """Each frozen path as the plan spells it and as it resolves, so an edit through a symlinked folder,
     or of the file a frozen symlink points at, is the same file."""

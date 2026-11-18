@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The sdlc gate hooks for Claude Code: one script, seven hook modes.
+"""The sdlc gate hooks for Claude Code: one script, eight hook modes, and one command (`frozen-status`, run by hand).
 
 The script is only the entry. Each mode is a handler in the `sdlc_hooks` package next to it, imported when that mode
 runs, so a call loads only what it needs; the docstring of each module says what its mode does:
@@ -8,6 +8,7 @@ runs, so a call loads only what it needs; the docstring of each module says what
   mcp (PreToolUse, matcher `^mcp__`)                 sdlc_hooks/jira/mcp.py
   jira-seen (PostToolUse, the ticket reads)          sdlc_hooks/jira/mcp.py
   snyk-seen (PostToolUse and PostToolUseFailure)     sdlc_hooks/snyk_gate.py
+  frozen-seen (PostToolUse, file tools incl. notebooks) sdlc_hooks/plan/frozen_seen.py
   precompact (PreCompact), compacted (SessionStart)  sdlc_hooks/compact.py
 `python3 -I` leaves this folder off sys.path, so the script adds it at the end (the standard library stays first); the
 project's own folder is never added.
@@ -60,6 +61,7 @@ MODES = {
     "mcp": Mode("sdlc_hooks.jira.mcp", "on_mcp", Hold("sdlc_hooks.jira.markers", "jira_marker_exists", "has a Jira run")),
     "jira-seen": Mode("sdlc_hooks.jira.mcp", "on_jira_seen", note="jira-seen-error"),  # a failure leaves the intake pending
     "snyk-seen": Mode("sdlc_hooks.snyk_gate", "on_snyk_seen", note="snyk-seen-error"),  # a scan not recorded leaves the gate incomplete
+    "frozen-seen": Mode("sdlc_hooks.plan.frozen_seen", "on_frozen_seen", note="frozen-seen-error"),  # advisory: never blocks
     "precompact": Mode("sdlc_hooks.compact", "on_precompact"),
     "compacted": Mode("sdlc_hooks.compact", "on_compacted"),
 }
@@ -89,16 +91,18 @@ def handle(mode: Mode, data: dict) -> None:
 
 
 def main() -> int:
+    name = sys.argv[1] if len(sys.argv) > 1 else ""
+    if name == "frozen-status":  # run by hand, reads nothing from stdin, changes nothing
+        return importlib.import_module("sdlc_hooks.plan.frozen_seen").print_status()
     if os.environ.get("SDLC_GATE", "").lower() == "off":
         return 0
     os.umask(0o077)
-    name = sys.argv[1] if len(sys.argv) > 1 else ""
     data = json.load(sys.stdin)
     if os.environ.get("SDLC_GATE_TRACE"):
         importlib.import_module("sdlc_hooks.core.audit").trace(name, data)
     if name not in MODES:
         raise ValueError(f"sdlc_gate.py: unknown mode {name!r}; expected 'prompt', 'tool', 'mcp', "
-                         "'jira-seen', 'snyk-seen', 'precompact' or 'compacted'")
+                         "'jira-seen', 'snyk-seen', 'frozen-seen', 'precompact' or 'compacted'")
     handle(MODES[name], data)
     return 0
 

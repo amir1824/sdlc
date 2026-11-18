@@ -4,6 +4,7 @@
 Usage:
   python3 -I status_check.py check <path to .sdlc/<slug>/status.md>
   python3 -I status_check.py hook     PostToolUse: reads the event on stdin, speaks only for .sdlc/*/status.md
+  python3 -I status_check.py fingerprint <path to status.md>   the run fingerprint (sdlc.md, `### Fingerprint`)
 
 Output: one finding per line, nothing when there are none. Exit 0 no findings, 1 findings, 2 unreadable
 input (not a regular file, over 64 kB, not UTF-8). A status.md with no `run:` header is a legacy file:
@@ -19,11 +20,12 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parent))  # -I leaves this folder off sys.path; the package comes last
+from sdlc_hooks.status.fingerprint import print_fingerprint  # noqa: E402
+from sdlc_hooks.status.stages import FILE_MAX_BYTES, QUOTE_CHARS, STAGES, intake_findings, order_findings, test_run_findings  # noqa: E402,E501
+
 MAX_BYTES = 64_000  # the same limit as STATUS_MAX_BYTES in sdlc_hooks/compact.py (a test pins them equal)
-PLAN_MAX_BYTES = 1024 * 1024
-QUOTE_CHARS = 80
 HOOK_MAX_FINDINGS = 10
-STAGES = ("Discover", "Define", "Design", "Plan", "Build", "Verify", "Ship", "Launch", "Learn")
 STATES = ("pending", "running", "done", "skipped", "blocked", "failed")
 NEEDS_REASON = ("skipped", "blocked", "failed")
 STAGE_LINE = re.compile(rf"(\d) ({'|'.join(STAGES)}): ({'|'.join(STATES)})(?: - (.+))?")
@@ -120,7 +122,7 @@ def plan_sha_findings(folder: Path, header: dict[str, str], stages: dict[int, tu
     plan = folder / "plan.md"
     if plan.is_symlink() or not plan.is_file():
         return ["Build has started but plan.md is missing or is not a regular file"]
-    if plan.stat().st_size > PLAN_MAX_BYTES:
+    if plan.stat().st_size > FILE_MAX_BYTES:
         return ["Build has started but plan.md is over 1 MiB: its sha256 was not checked"]
     if header.get("plan-sha") != hashlib.sha256(plan.read_bytes()).hexdigest():
         return ["Build has started but `plan-sha:` is not the sha256 of plan.md (the plan changed after approval, or was never approved)"]
@@ -152,7 +154,8 @@ def findings_for(path: Path) -> list[str]:
     if not lines or "run" not in header:
         return ["legacy status.md (no `run:` header): not checked"]
     stage_found, stages = stage_findings(lines)
-    return (header_findings(header) + stage_found + file_findings(path.parent, header, stages)
+    return (header_findings(header) + intake_findings(header) + stage_found + order_findings(stages)
+            + file_findings(path.parent, header, stages) + test_run_findings(path.parent, header, stages)
             + path_findings(header, stages) + last_line_findings(path.parent, lines))
 
 
@@ -175,11 +178,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check").add_argument("path", type=Path)
+    commands.add_parser("fingerprint").add_argument("path", type=Path)
     commands.add_parser("hook")
     args = parser.parse_args()
     if args.command == "hook":
         run_hook()
         return 0
+    if args.command == "fingerprint":
+        return print_fingerprint(args.path, read_status)
     try:
         found = findings_for(args.path)
     except (OSError, ValueError) as error:

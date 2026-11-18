@@ -3,8 +3,7 @@
 
 Usage:
   python3 -I security_gate.py     reads {"state": ..., "changed": [paths] or null, "tree": "<hash>"} on stdin and prints
-                                  `Security gate: PASS|BLOCK|INCOMPLETE - <reasons>` then one line per finding.
-                                  Exit 0 for a verdict, 2 when the input cannot be read.
+                                  `Security gate: PASS|BLOCK|INCOMPLETE - <reasons>` then one line per finding; exit 0, or 2 when the input is unreadable.
 
 `evaluate(state, facts)` is pure: it reads nothing and writes nothing. `facts` is what git said about the code: the
 changed files, the hash of the code, and notes giving the reason for whatever git could not say. The state is the
@@ -12,12 +11,12 @@ project's record:
   policy    "on" (Snyk is required), "off" (the owner turned it off) or None (not decided)
   scans     {"code" | "sca" | "iac": {"status": "completed" | "error" | "unusable", "tree": <hash of the code
             that was scanned>, "findings": [{"id", "severity", "kind", "file", "flow": [files]}]}}
-  accepted  finding ids the owner accepted in their own words
+  accepted  `<finding id>#<severity>` keys the owner accepted in their own words; a plan approval clears them
   waived    tree hashes for which the owner let an incomplete gate through
 `changed` null means the change could not be listed (no base was pinned, or git failed): the gate is INCOMPLETE and
 every finding counts as in the change. `tree` null means the code could not be hashed (too large, too slow, or git failed): every scan is `not hashed`.
-INCOMPLETE is never PASS: a required scan that is missing, failed, narrowed or older than the code is
-INCOMPLETE. A waiver changes whether the run may close, never the status.
+INCOMPLETE is never PASS: a required scan that is missing, failed, narrowed or older than the code is INCOMPLETE. A waiver
+changes whether the run may close, never the status. `waiting` is true when the only thing missing is a scan not run yet.
 
 ponytail: a finding counts as in the change when its file, or any step of its flow, is a changed file (a
 dependency finding: a manifest or lockfile next to its own changed). That is conservative: it blocks on a
@@ -114,10 +113,11 @@ def in_the_change(item: dict, changed: set[str] | None) -> bool:
 
 
 def describe(item: dict, changed: set[str] | None, accepted: set[str]) -> dict:
-    blocking = item["severity"].lower() not in NOT_BLOCKING
-    return {"id": item["id"], "severity": item["severity"].lower(), "kind": item["kind"], "file": item["file"],
-            "class": "unknown" if in_the_change(item, changed) else "pre-existing", "blocking": blocking,
-            "accepted": item["id"] in accepted}
+    severity = item["severity"].lower()
+    key = f"{item['id']}#{severity}"  # an acceptance covers the finding at the severity the owner saw
+    return {"id": item["id"], "severity": severity, "kind": item["kind"], "file": item["file"], "key": key,
+            "class": "unknown" if in_the_change(item, changed) else "pre-existing",
+            "blocking": severity not in NOT_BLOCKING, "accepted": key in accepted}
 
 
 def listed_findings(scans: dict, facts: Facts, accepted: set[str]) -> list[dict]:
@@ -155,9 +155,10 @@ def evaluate(state: dict, facts: Facts) -> dict:
     required = required_scanners(facts.changed or [])
     reasons = (["changed files: unknown"] if facts.changed is None else []) + list(facts.notes)
     reasons += scan_reasons(required, scans, facts.tree)
+    pending = [name for name in required if scans.get(name) is None]
     listed = listed_findings(scans, facts, strings(state.get("accepted")))
     blockers = [item for item in listed if item["blocking"] and item["class"] == "unknown" and not item["accepted"]]
-    reasons += [f"{item['short']} {item['severity']} {clean_for_display(item['file'])}: in the change, not accepted"
+    reasons += [f"{item['short']} {clean_for_display(item['severity'])} {clean_for_display(item['file'])}: in the change, not accepted"
                 for item in blockers[:SHOWN_FINDINGS]]
     if len(blockers) > SHOWN_FINDINGS:
         reasons.append(f"... and {len(blockers) - SHOWN_FINDINGS} more in the change, not accepted")
@@ -165,8 +166,8 @@ def evaluate(state: dict, facts: Facts) -> dict:
     if not required and facts.changed is not None:
         reasons.insert(0, "no scan required for this change")
     waived = status == "INCOMPLETE" and facts.tree in strings(state.get("waived"))
-    return {"status": status, "enforced": True, "closable": status == "PASS" or waived,
-            "reasons": reasons + ([OWNER_WAIVER] if waived else []), "findings": listed}
+    return {"status": status, "enforced": True, "closable": status == "PASS" or waived, "findings": listed,
+            "reasons": reasons + ([OWNER_WAIVER] if waived else []), "waiting": status == "INCOMPLETE" and len(reasons) == len(pending)}
 
 
 def report(result: dict) -> str:
