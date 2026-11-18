@@ -140,7 +140,8 @@ class JiraCallTest(TempDirTest):
 class RecordTest(TempDirTest):
     def event(self, tool="snyk_code_scan", tool_input=None, reply=None, kind="PostToolUse", server="Snyk_Security",
               response=None, error=None):
-        sent = {"hook_event_name": kind, "mcp_server": server, "tool_name": f"mcp__{server}__{tool}",
+        shown = {"name": server.replace("_", " "), "source": "sdk"}  # the shape the host sent, with the display name
+        sent = {"hook_event_name": kind, "mcp_server": shown, "tool_name": f"mcp__{server}__{tool}",
                 "tool_input": {"path": str(self.root)} if tool_input is None else tool_input}
         sent["tool_response"] = response if response is not None else [{"type": "text", "text": json.dumps(reply)}]
         return sent if error is None else {**{key: sent[key] for key in sent if key != "tool_response"}, "error": error}
@@ -190,8 +191,20 @@ class RecordTest(TempDirTest):
         self.assertIsNone(self.read(self.event("snyk_auth", reply=self.reply())))
 
     def test_a_server_name_that_differs_from_the_tool_name_is_ignored(self):
-        sent = {**self.event(reply=self.reply()), "mcp_server": "other"}
+        sent = {**self.event(reply=self.reply()), "mcp_server": {"name": "Other Server", "source": "sdk"}}
         self.assertIsNone(self.read(sent))
+
+    def test_a_server_given_as_plain_text_is_read_too(self):
+        sent = {**self.event(reply=self.reply()), "mcp_server": "Snyk_Security"}
+        self.assertEqual(self.read(sent)[1]["status"], "completed")
+
+    def test_a_server_that_is_neither_text_nor_a_named_object_is_ignored(self):
+        sent = {**self.event(reply=self.reply()), "mcp_server": 5}
+        self.assertIsNone(self.read(sent))
+
+    def test_an_event_with_no_server_field_is_read_by_the_tool_name(self):
+        sent = {key: value for key, value in self.event(reply=self.reply()).items() if key != "mcp_server"}
+        self.assertEqual(self.read(sent)[1]["status"], "completed")
 
     def test_a_scan_of_a_subfolder_is_unusable(self):
         sent = self.event(tool_input={"path": self.absolute("src")}, reply=self.reply())

@@ -21,6 +21,8 @@ comment edit in a file with an old High. The upgrade is a scan of the base to co
 ponytail: K8s and CloudFormation YAML need their content read to be told from other YAML, so only `.tf` and
 `.tf.json` files require an IaC scan.
 """
+from __future__ import annotations
+
 import json
 import re
 import sys

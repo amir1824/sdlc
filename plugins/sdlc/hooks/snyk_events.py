@@ -2,8 +2,9 @@
 arguments and path, and the hash of the code a scan saw. No state is read or written here.
 
 The payload shapes come from a probe of a real Snyk MCP server (2026-11-18): a PostToolUse payload carries
-`mcp_server` and a `tool_response` that is a list of text blocks, the first holding the reply as a JSON string;
-a PostToolUseFailure payload carries `error` and no `tool_response`. A failure the server reports in plain
+`mcp_server`, an object such as {"name": "Snyk Security", "source": "sdk"} (the display name, with a space; the
+tool name spells it Snyk_Security), and a `tool_response` that is a list of text blocks, the first holding the
+reply as a JSON string; a PostToolUseFailure payload carries `error` and no `tool_response`. A failure the server reports in plain
 text (not authenticated, folder not trusted, product not enabled) arrives as a normal reply, so a reply that
 is not a JSON object with `success` true is an error, never an empty result.
 
@@ -12,9 +13,12 @@ and `line`, and a finding without them makes the scan unusable.
 ponytail: the hash reads every untracked file that is not ignored, with a 3-second limit on each git call
 and none on the reads; a project with a large untracked tree can run past the hook's timeout.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -110,13 +114,21 @@ def full_scan(scanner: str, tool_input: object, root: str, canon) -> bool:
             and canon(tool_input["path"]) == canon(root))
 
 
+def server_name(value: object) -> str | None:
+    """The server's name as a tool name spells it (every character outside letters, digits, `_` and `-` is `_`),
+    from the payload's `mcp_server`: an object with a `name`, or the name itself."""
+    name = value.get("name") if isinstance(value, dict) else value
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name) if isinstance(name, str) else None
+
+
 def record_from_event(event: dict, root: str, tree: str | None, servers, canon) -> tuple[str, dict] | None:
     """(scanner, record) for a Snyk scan event, or None when the event is not a scan from a listed server.
     status is `completed`, `error` (failed, or a reply that is not a count-checked success) or `unusable`
     (the scan was narrowed, the code could not be hashed, or a finding is unreadable)."""
     parts = str(event.get("tool_name", "")).split("__", 2)
     scanner = SCAN_TOOLS.get(parts[2]) if len(parts) == 3 and parts[0] == "mcp" else None
-    if scanner is None or parts[1] not in servers or event.get("mcp_server", parts[1]) != parts[1]:
+    named = parts[1] if "mcp_server" not in event else server_name(event["mcp_server"])
+    if scanner is None or parts[1] not in servers or named != parts[1]:
         return None
     reply = None if event.get("hook_event_name") == "PostToolUseFailure" else reply_object(event.get("tool_response"))
     issues = reply.get("issues") if reply else None

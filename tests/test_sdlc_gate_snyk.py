@@ -40,7 +40,8 @@ class SnykGateTest(McpGateTest):
     def seen(self, tool="snyk_code_scan", tool_input=None, issues=(ISSUE,), server="Snyk_Security", env=None,
              kind="PostToolUse"):
         reply = {"success": True, "issueCount": len(issues), "issues": list(issues)}
-        payload = {"hook_event_name": kind, "mcp_server": server, "tool_name": f"mcp__{server}__{tool}",
+        payload = {"hook_event_name": kind, "mcp_server": {"name": server.replace("_", " "), "source": "sdk"},
+                   "tool_name": f"mcp__{server}__{tool}",
                    "tool_input": {"path": str(self.project)} if tool_input is None else tool_input,
                    "tool_response": [{"type": "text", "text": json.dumps(reply)}]}
         return self.run_hook("snyk-seen", payload, env)
