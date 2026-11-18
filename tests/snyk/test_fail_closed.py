@@ -2,29 +2,33 @@
 cannot be parsed, a repo git cannot read) and that it never touches a project where Snyk is off or undecided.
 
 Run: python3 -I -m unittest discover -s tests
-Some tests call plugins/sdlc/hooks/sdlc_gate.py in this process so that an error can be made in it that no input to
-the script could make.
+Some tests call the modules of plugins/sdlc/hooks/sdlc_hooks in this process so that an error can be made in them that no
+input to the script could make.
 """
 import contextlib
-import importlib.util
+import importlib
 import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from support.paths import SCRIPT
+from support.paths import HOOKS
 from support.snyk_base import GATE_TAG, SnykCloseTest
+
+
+sys.path.append(str(HOOKS))
 
 
 class FailClosedInProcessTest(unittest.TestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location("sdlc_gate_under_test", SCRIPT)
-        self.gate = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.gate)
+        self.gate = importlib.import_module("sdlc_hooks.snyk_gate")
+        self.state = importlib.import_module("sdlc_hooks.snyk_state")
+        self.tool = importlib.import_module("sdlc_hooks.tool")
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.project = Path(self.tmp.name, "project")
@@ -37,8 +41,8 @@ class FailClosedInProcessTest(unittest.TestCase):
         self.status = str(self.project / ".sdlc" / "x" / "status.md")
 
     def policy(self, value):
-        path = self.gate.snyk_state_path(self.project)
-        self.gate.write_snyk_state(path, {**self.gate.read_snyk_state(path), "policy": value})
+        path = self.state.snyk_state_path(self.project)
+        self.state.write_snyk_state(path, {**self.state.read_snyk_state(path), "policy": value})
 
     def check(self):
         return self.gate.snyk_close_reason(self.event, "Write", {"file_path": self.status, "content": "closed\n"})
@@ -55,9 +59,9 @@ class FailClosedInProcessTest(unittest.TestCase):
 
     def test_a_record_that_cannot_be_parsed_counts_as_unreadable_and_not_as_off(self):
         self.policy("on")
-        path = self.gate.snyk_state_path(self.project)
+        path = self.state.snyk_state_path(self.project)
         path.write_text("[" * 100000)
-        self.assertEqual(self.gate.read_snyk_state(path)["policy"], self.gate.POLICY_UNREADABLE)
+        self.assertEqual(self.state.read_snyk_state(path)["policy"], self.state.POLICY_UNREADABLE)
 
     def test_a_module_that_cannot_be_loaded_holds_the_gate_with_snyk_on(self):
         self.policy("on")
@@ -72,9 +76,9 @@ class FailClosedInProcessTest(unittest.TestCase):
         self.policy("on")
         sent = {**self.event, "tool_name": "Write", "tool_input": {"file_path": self.status, "content": "closed\n"}}
         printed = io.StringIO()
-        with mock.patch.object(self.gate, "file_tool_reason", side_effect=RuntimeError("boom")):
+        with mock.patch.object(self.tool, "file_tool_reason", side_effect=RuntimeError("boom")):
             with contextlib.redirect_stdout(printed):
-                self.gate.on_tool(sent)
+                self.tool.on_tool(sent)
         self.assertIn("Snyk gate", printed.getvalue())
 
     def test_the_run_folder_has_the_same_name_in_every_module_that_names_it(self):
@@ -83,7 +87,7 @@ class FailClosedInProcessTest(unittest.TestCase):
 
     def test_the_policy_names_are_the_same_here_and_in_the_verdict(self):
         gate = self.gate.load_sibling("security_gate")
-        self.assertEqual((self.gate.POLICY_ON, self.gate.POLICY_OFF, self.gate.POLICY_UNREADABLE),
+        self.assertEqual((self.state.POLICY_ON, self.state.POLICY_OFF, self.state.POLICY_UNREADABLE),
                          (gate.POLICY_ON, gate.POLICY_OFF, gate.POLICY_UNREADABLE))
 
     def test_the_owner_verbs_are_the_same_in_the_bash_check_and_in_the_prompt_reader(self):

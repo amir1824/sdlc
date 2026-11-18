@@ -73,12 +73,12 @@ To keep your own version of a file (for example an agent with your own MCP tools
 |---|---|
 | `plugins/sdlc/agents/` | 14 role agents: planning, building, review, security, devops, docs and research |
 | `plugins/sdlc/commands/` | `/sdlc` (the full pipeline; `/sdlc jira <KEY>` runs a ticket), `/brutal-review`, `/security-audit` |
-| `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, wired by `hooks.json`; modes `prompt`, `tool`, `mcp`, `jira-seen`, `precompact`, `compacted`), `status_check.py` (reports a malformed run `status.md` as context after each write; advisory, wired by `hooks.json`), and `repeat_guard.py` (tells an agent to stop when the same test file fails three times in 30 minutes; wired by hand in `settings.json` as a `PostToolUse` and a `PostToolUseFailure` hook on Bash, not by `hooks.json`) |
+| `plugins/sdlc/hooks/` | the gate hooks (`sdlc_gate.py`, the entry wired by `hooks.json`; modes `prompt`, `tool`, `mcp`, `jira-seen`, `snyk-seen`, `precompact`, `compacted`; each mode's code is in the `sdlc_hooks/` package next to it, by topic: `plan/`, `files/`, `bash/`, `jira/`, and `snyk/` for the Snyk gate), `status_check.py` (reports a malformed run `status.md` as context after each write; advisory, wired by `hooks.json`), and `repeat_guard.py` (tells an agent to stop when the same test file fails three times in 30 minutes; wired by hand in `settings.json` as a `PostToolUse` and a `PostToolUseFailure` hook on Bash, not by `hooks.json`) |
 | `plugins/sdlc/skills/` | the six skills the gates call |
 | `rules/` | 7 engineering rules for `~/.claude/rules/` |
 | `scripts/` | `install.sh`, `check.sh` (drift, hook wiring, versions), and the tools for the [lessons library](docs/lessons-library.md) |
 | `plugins/sdlc/evals/` | 39 eval cases for the agents and commands, run on demand with `scripts/verify.sh --evals` (it calls the model and costs money) |
-| `tests/` | unit tests for the hooks and the scripts |
+| `tests/` | unit tests, in a folder per topic: `gate/` (the gate hook, by plan, files, bash and jira), `snyk/`, `hooks/`, `scripts/`, `plugin/`; `support/` holds the base classes |
 | `docs/` | the diagram, the lessons library guide and the list of optional skills |
 
 ## How it works

@@ -22,7 +22,7 @@ PLAN_TEXT = "# plan\n"
 PLAN_SHA = hashlib.sha256(PLAN_TEXT.encode()).hexdigest()
 HEADER = f"run: slugify\nrisk: MEDIUM\npath: full\nbase: {BASE}\n"
 BOGUS_STAGE_LINES = "7 Bogus: done\n" * 30
-GATE = REPO / "plugins" / "sdlc" / "hooks" / "sdlc_gate.py"
+GATE = REPO / "plugins" / "sdlc" / "hooks" / "sdlc_hooks" / "compact.py"
 FULL_FILES = ("research.md", "prd.md", "metrics.md", "plan.md", "build.md")
 FULL_RUN = (
     HEADER + f"plan-sha: {PLAN_SHA}\n"
