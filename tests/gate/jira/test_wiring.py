@@ -48,6 +48,12 @@ class WiringTest(unittest.TestCase):
         text = (REPO / "plugins" / "sdlc" / "commands" / "sdlc.md").read_text()
         self.assertIn("| resume <slug> | jira <KEY>", text.splitlines()[2])
 
+    def test_sdlc_md_lists_tickets_for_a_jira_request_with_no_key_and_starts_no_run(self):
+        text = (REPO / "plugins" / "sdlc" / "commands" / "sdlc.md").read_text()
+        self.assertIn("## Jira picker", text)
+        self.assertIn("`searchJiraIssuesUsingJql`", text)
+        self.assertIn("Write no `.sdlc/` file and start no stage", text)
+
     def test_hooks_json_runs_jira_seen_after_an_mcp_call(self):
         hooks = json.loads((REPO / "plugins" / "sdlc" / "hooks" / "hooks.json").read_text())["hooks"]["PostToolUse"]
         self.assertEqual((hooks[1]["matcher"], hooks[1]["hooks"][0]["command"]),
