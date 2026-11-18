@@ -45,7 +45,7 @@
         ]
       },
       {
-        "matcher": "^mcp__",
+        "matcher": "^mcp__.*(getJiraIssue|executeRead|execute_read|jira_get_issue)",
         "hooks": [
           { "type": "command", "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py\" jira-seen", "timeout": 5 }
         ]

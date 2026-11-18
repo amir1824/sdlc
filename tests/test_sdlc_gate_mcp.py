@@ -31,6 +31,14 @@ OTHER_WRITES = ("mcp__supabase__execute_sql", "mcp__Claude_Browser__navigate", "
                 "mcp__7eca610e-292a-4260-90ca-1b88681efe7a__generate_image", "mcp__ctx__graphql_mutation_x",
                 "mcp__ccd_session__start_session", "mcp__scheduled-tasks__create_scheduled_task")
 APP_TOOLS = ("mcp__ccd_turn__update_plan", "mcp__ccd_turn__wrap_up", "mcp__ccd_session__mark_chapter")
+UUID_WRITES = tuple(UUID_SERVER + name for name in WRITES)
+NAMED_WRITES = tuple(NAMED_SERVER + name for name in WRITES)
+UUID_READS = tuple(UUID_SERVER + name for name in READS)
+UUID_LOOKALIKES = tuple(UUID_SERVER + name for name in LOOKALIKES)
+READS_WITHOUT_A_VERB = ("mcp__plugin_gitkraken_gitkraken__git_status", "mcp__Claude_Browser__browser_snapshot",
+                        "mcp__Claude_Browser__browser_take_screenshot")
+JIRA_SEEN_MATCHER = "^mcp__.*(getJiraIssue|executeRead|execute_read|jira_get_issue)"
+NOT_UNDERSTOOD = "/sdlc jira SCRUM-\uff11"  # looks like a key, is not one
 
 
 class McpGateTest(GateTest):
@@ -45,7 +53,7 @@ class McpGateTest(GateTest):
         return bool(self.mcp(tool, tool_input).stdout)
 
     def denied_among(self, tools):
-        return [tool for tool in tools if self.denied(tool)]
+        return list(filter(self.denied, tools))
 
     def jira_run(self):
         self.prompt("/sdlc jira SCRUM-123")
@@ -172,19 +180,19 @@ class MarkerTest(McpGateTest):
 class DenyTest(McpGateTest):
     def test_every_write_is_denied_under_a_uuid_server_id(self):
         self.jira_run_approved()
-        self.assertEqual(self.denied_among([UUID_SERVER + name for name in WRITES]), [UUID_SERVER + name for name in WRITES])
+        self.assertEqual(self.denied_among(UUID_WRITES), list(UUID_WRITES))
 
     def test_every_write_is_denied_under_a_named_server(self):
         self.jira_run_approved()
-        self.assertEqual(self.denied_among([NAMED_SERVER + name for name in WRITES]), [NAMED_SERVER + name for name in WRITES])
+        self.assertEqual(self.denied_among(NAMED_WRITES), list(NAMED_WRITES))
 
     def test_every_read_is_allowed(self):
         self.jira_run_approved()
-        self.assertEqual(self.denied_among([UUID_SERVER + name for name in READS]), [])
+        self.assertEqual(self.denied_among(UUID_READS), [])
 
     def test_a_write_named_like_a_read_is_denied(self):
         self.jira_run_approved()
-        self.assertEqual(self.denied_among([UUID_SERVER + name for name in LOOKALIKES]), [UUID_SERVER + name for name in LOOKALIKES])
+        self.assertEqual(self.denied_among(UUID_LOOKALIKES), list(UUID_LOOKALIKES))
 
     def test_execute_read_naming_a_write_that_starts_like_a_read_is_denied(self):
         self.jira_run_approved()
@@ -233,6 +241,10 @@ class DenyTest(McpGateTest):
         self.jira_run_approved()
         self.assertEqual(self.denied_among(OTHER_WRITES), list(OTHER_WRITES))
 
+    def test_a_read_without_a_read_verb_is_denied_too(self):
+        self.jira_run_approved()
+        self.assertEqual(self.denied_among(READS_WITHOUT_A_VERB), list(READS_WITHOUT_A_VERB))
+
     def test_the_apps_own_task_tools_are_allowed_in_a_jira_run(self):
         self.jira_run_approved()
         self.assertEqual(self.denied_among(APP_TOOLS), [])
@@ -243,10 +255,10 @@ class DenyTest(McpGateTest):
 
     def test_a_plain_sdlc_session_denies_no_atlassian_write(self):
         self.locked_and_approved()
-        self.assertEqual(self.denied_among([UUID_SERVER + name for name in WRITES]), [])
+        self.assertEqual(self.denied_among(UUID_WRITES), [])
 
     def test_a_session_that_never_typed_sdlc_denies_nothing(self):
-        self.assertEqual(self.denied_among([UUID_SERVER + name for name in WRITES]), [])
+        self.assertEqual(self.denied_among(UUID_WRITES), [])
 
     def test_a_tool_that_is_not_mcp_is_not_judged(self):
         self.jira_run_approved()
@@ -266,7 +278,7 @@ class IntakeTest(McpGateTest):
 
     def test_a_jira_prompt_arms_the_intake_with_the_key(self):
         self.prompt("/sdlc jira SCRUM-123")
-        self.assertEqual((self.pending.read_text(), self.marker.read_text()), ("SCRUM-123", "SCRUM-123"))
+        self.assertEqual((self.pending.read_text(), self.marker.is_file()), ("SCRUM-123", True))
 
     def test_a_lowercase_key_is_stored_in_upper_case(self):
         self.prompt("/sdlc jira scrum-123")
@@ -308,17 +320,72 @@ class IntakeTest(McpGateTest):
         self.prompt("/sdlc full jira SCRUM-5")
         self.assertEqual(self.pending.read_text(), "SCRUM-5")
 
-    def test_jira_alone_arms_the_intake_with_no_key(self):
+    def test_jira_alone_is_an_ordinary_request(self):
         self.prompt("/sdlc jira")
-        self.assertEqual(self.pending.read_text(), "?")
+        self.assertEqual((self.marker.exists(), self.pending.exists()), (False, False))
 
-    def test_jira_followed_by_words_arms_the_intake_with_no_key(self):
-        self.prompt("/sdlc jira fix the slug bug")
-        self.assertEqual(self.pending.read_text(), "?")
+    def test_jira_followed_by_ordinary_words_is_an_ordinary_request(self):
+        self.prompt("/sdlc jira dashboard for the team")
+        self.assertEqual((self.marker.exists(), self.pending.exists()), (False, False))
+
+    def test_a_feature_request_that_starts_with_jira_can_be_approved(self):
+        self.prompt("/sdlc jira dashboard for the team")
+        self.prompt("approve plan")
+        self.assertTrue(self.approved.is_file())
+
+    def test_a_feature_request_that_starts_with_jira_keeps_its_mcp_writes(self):
+        self.prompt("/sdlc jira dashboard for the team")
+        self.prompt("approve plan")
+        self.assertFalse(self.denied("mcp__figma__use_figma", {"code": "x"}))
 
     def test_a_full_width_digit_arms_the_intake_with_no_key(self):
         self.prompt("/sdlc jira SCRUM-\uff11")
         self.assertEqual(self.pending.read_text(), "?")
+
+    def test_the_refusal_names_the_intake_exit_and_not_sdlc_off(self):
+        self.jira_run()
+        reason = self.context(self.prompt("approve plan"))
+        self.assertIn("`sdlc intake off`", reason)
+        self.assertNotIn("replies `sdlc off`", reason)
+
+    def test_sdlc_intake_off_releases_only_the_intake(self):
+        self.jira_run()
+        self.prompt("sdlc intake off")
+        self.assertEqual((self.pending.exists(), self.marker.is_file(), self.lock.is_file()), (False, True, True))
+
+    def test_approve_plan_works_after_sdlc_intake_off(self):
+        self.jira_run()
+        self.prompt("sdlc intake off")
+        self.prompt("approve plan")
+        self.assertTrue(self.approved.is_file())
+
+    def test_mcp_writes_stay_denied_after_sdlc_intake_off(self):
+        self.jira_run()
+        self.prompt("sdlc intake off")
+        self.assertTrue(self.denied("mcp__figma__use_figma", {"code": "x"}))
+
+    def test_sdlc_intake_off_says_the_label_was_not_checked(self):
+        self.jira_run()
+        self.assertIn("the ticket's label was not checked", self.context(self.prompt("sdlc intake off")))
+
+    def test_sdlc_intake_off_with_a_slash_does_not_start_a_run(self):
+        self.jira_run()
+        self.prompt("/sdlc intake off")
+        self.assertEqual((self.pending.exists(), "since" in self.lock.read_text()), (False, True))
+
+    def test_sdlc_intake_off_with_nothing_pending_is_silent(self):
+        self.locked_and_approved()
+        self.assertEqual(self.prompt("sdlc intake off").stdout, "")
+
+    def test_sdlc_intake_off_is_logged(self):
+        self.jira_run()
+        self.prompt("sdlc intake off")
+        self.assertIn("intake-off", (self.home / "sdlc-gate" / "approvals.log").read_text())
+
+    def test_sdlc_off_still_releases_everything(self):
+        self.jira_run()
+        self.prompt("sdlc off")
+        self.assertEqual((self.pending.exists(), self.marker.exists(), self.lock.exists()), (False, False, False))
 
     def test_a_pending_file_with_junk_in_it_waits_for_no_key(self):
         self.jira_run()
@@ -358,11 +425,11 @@ class IntakeTest(McpGateTest):
         self.assertIn("SCRUM-123", self.context(self.prompt("approve plan")))
 
     def test_the_refusal_without_a_key_says_so(self):
-        self.prompt("/sdlc jira")
+        self.prompt(NOT_UNDERSTOOD)
         self.assertIn("no ticket key was understood", self.context(self.prompt("approve plan")))
 
     def test_the_start_note_without_a_key_asks_for_it_to_be_retyped(self):
-        self.assertIn("retypes it as `/sdlc jira SCRUM-123`", self.context(self.prompt("/sdlc jira")))
+        self.assertIn("retypes it as `/sdlc jira SCRUM-123`", self.context(self.prompt(NOT_UNDERSTOOD)))
 
     def test_approve_plan_with_a_folder_name_is_refused_too(self):
         self.jira_run()
@@ -511,11 +578,21 @@ class SeenTest(McpGateTest):
         self.seen({"key": "SCRUM-123", "fields": {"labels": [], "comment": {"comments": [{"labels": ["sdlc"]}]}}})
         self.assertTrue(self.pending.is_file())
 
-    def test_a_response_with_no_labels_list_is_not_a_ticket(self):
+    def test_a_ticket_whose_response_has_no_labels_list_has_no_label(self):
         self.jira_run()
         done = self.seen({"key": "SCRUM-123", "fields": {"summary": "x"}})
         self.assertTrue(self.pending.is_file())
+        self.assertIn("abandoned: no sdlc label", self.note(done))
+
+    def test_a_response_with_no_issue_in_it_is_unreadable(self):
+        self.jira_run()
+        done = self.seen({"issue": {"key": "SCRUM-123", "fields": {"labels": ["sdlc"]}}})
+        self.assertTrue(self.pending.is_file())
         self.assertIn("could not be read as one Jira issue", self.note(done))
+
+    def test_the_unreadable_note_names_the_intake_exit(self):
+        self.jira_run()
+        self.assertIn("`sdlc intake off`", self.note(self.seen("Labels: sdlc")))
 
     def test_a_markdown_response_is_not_read(self):
         self.jira_run()
@@ -530,7 +607,7 @@ class SeenTest(McpGateTest):
         self.assertIn("the issue in this response is not SCRUM-123", self.note(done))
 
     def test_with_no_key_understood_no_ticket_clears_the_intake(self):
-        self.prompt("/sdlc jira")
+        self.prompt(NOT_UNDERSTOOD)
         self.seen(issue(["sdlc"], key="SCRUM-9"))
         self.assertTrue(self.pending.is_file())
 
@@ -571,7 +648,7 @@ class SeenTest(McpGateTest):
         self.assertIn("could not be read as one Jira issue", self.note(done))
 
     def test_a_question_mark_key_cannot_be_satisfied_by_a_call_that_asks_for_a_question_mark(self):
-        self.prompt("/sdlc jira")
+        self.prompt(NOT_UNDERSTOOD)
         done = self.seen({"fields": {"labels": ["sdlc"]}}, tool_input={"cloudId": "c1", "issueIdOrKey": "?"})
         self.assertEqual((self.pending.read_text(), "no ticket key was understood" in self.note(done)), ("?", True))
 
@@ -744,7 +821,20 @@ class WiringTest(unittest.TestCase):
     def test_hooks_json_runs_jira_seen_after_an_mcp_call(self):
         hooks = json.loads((REPO / "plugins" / "sdlc" / "hooks" / "hooks.json").read_text())["hooks"]["PostToolUse"]
         self.assertEqual((hooks[1]["matcher"], hooks[1]["hooks"][0]["command"]),
-                         ("^mcp__", 'python3 -I "${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py" jira-seen'))
+                         (JIRA_SEEN_MATCHER, 'python3 -I "${CLAUDE_PLUGIN_ROOT}/hooks/sdlc_gate.py" jira-seen'))
+
+    def test_the_jira_seen_matcher_covers_a_uuid_server_and_a_named_one(self):
+        self.assertRegex(UUID_SERVER + "getJiraIssue", JIRA_SEEN_MATCHER)
+        self.assertRegex(NAMED_SERVER + "jira_get_issue", JIRA_SEEN_MATCHER)
+
+    def test_the_jira_seen_matcher_covers_the_execute_read_wrapper(self):
+        self.assertRegex(UUID_SERVER + "executeRead", JIRA_SEEN_MATCHER)
+
+    def test_the_jira_seen_matcher_skips_other_servers_tools(self):
+        self.assertNotRegex("mcp__figma__get_design_context", JIRA_SEEN_MATCHER)
+
+    def test_the_readme_snippet_uses_the_same_jira_seen_matcher(self):
+        self.assertIn('"matcher": "%s"' % JIRA_SEEN_MATCHER, (REPO / "README.md").read_text())
 
     def test_the_readme_snippet_for_a_manual_install_wires_jira_seen(self):
         self.assertIn("/path/to/sdlc/plugins/sdlc/hooks/sdlc_gate.py jira-seen", (REPO / "README.md").read_text())

@@ -26,14 +26,16 @@ these after the fact; an OS sandbox would prevent them.
 `mcp` (PreToolUse, matcher `^mcp__`): in a session with a Jira run, denies every MCP tool whose name does not
 start with a read verb (so a ticket cannot make the chair write to Atlassian, or send its text out through
 another server), except the host app's own bookkeeping tools (APP_TOOLS). A session has a Jira run when the owner
-typed `/sdlc jira ...` or `/sdlc resume jira-...`, when the prompt that starts a run, or a gated session's reply,
-holds an atlassian.net/browse link, or when a gated session finds `.sdlc/jira-*` in the project;
-the marker is the file `sdlc-gate/<session>.jira` (it holds the first key typed), which only `sdlc off` removes.
-`/sdlc jira KEY` (or `resume jira-key`) also writes `sdlc-gate/<session>.jira-intake`: `approve plan` is refused
-while it exists, and `jira-seen` (PostToolUse, matcher `^mcp__`) removes it when this session reads that ticket
-and the `labels` (or `fields.labels`) list of the response, a JSON object, holds the label (SDLC_JIRA_LABEL,
-default `sdlc`). Free text is never searched, so a ticket cannot spell its own label; a response in another
-shape leaves the intake pending (`approve plan` refused; the owner can reply `sdlc off`). A key or link in a reply only marks the session.
+typed `/sdlc jira KEY` or `/sdlc resume jira-key` (`jira` followed by ordinary words is an ordinary request; a
+token that looks like a key or a link but was not understood still counts), when the prompt that starts a run, or
+a gated session's reply, holds an atlassian.net/browse link, or when a gated session finds `.sdlc/jira-*` in the
+project; the marker is the file `sdlc-gate/<session>.jira` (only its existence is read), which only `sdlc off`
+removes. A Jira run also writes `sdlc-gate/<session>.jira-intake` (it holds the key, or `?` when none was
+understood): `approve plan` is refused while it exists, and `jira-seen` (PostToolUse, matcher on the ticket reads)
+removes it when this session reads that ticket and the `labels` (or `fields.labels`) list of the response, a JSON
+object, holds the label (SDLC_JIRA_LABEL, default `sdlc`). Free text is never searched, so a ticket cannot spell
+its own label; a response in another shape leaves the intake pending, and the owner can reply `sdlc intake off`
+to go on without the label check: only the intake goes, the write block and the code lock stay.
 ponytail: this stops a slip by the chair or text in a ticket, not a shell: Bash can delete the markers, as it can
 the lock; a `claude -p` child has its own session; `curl` and `acli` are not MCP; a crash or a timeout of the hook
 allows; a new `session_id` (/clear, a resume) has no marker, as it has no lock; an old `.sdlc/jira-*` folder marks
@@ -83,10 +85,10 @@ APPROVE_PROMPT = re.compile(
     r"approve plan(?:[ \t]+(?P<slug>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9_-])?))?[\s.!]*",
     re.IGNORECASE)
 RELEASE_PROMPT = re.compile(r"/?sdlc off[\s.!]*", re.IGNORECASE)
+RELEASE_INTAKE_PROMPT = re.compile(r"/?sdlc intake off[\s.!]*", re.IGNORECASE)
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 READ_ONLY_AGENTS = {"tech-lead", "security-reviewer", "brutal-reviewer", "analyst", "leak-scanner"}
-JIRA_PROMPT = re.compile(r"/(?:[\w-]+:)?sdlc\s+(?:(?:lean|full)\s+)?(?:jira(?:\s|$)|resume\s+jira-)", re.IGNORECASE)
 # A link to a ticket in an owner prompt marks the session (every non-read MCP tool is denied there until `sdlc off`).
 # A bare key does not: UTF-8, SHA-256 and ISO-8601 look like keys, and a plain run would lose its MCP writes.
 JIRA_CUE = re.compile(r"atlassian\.net/browse/")
@@ -95,6 +97,9 @@ JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]{1,30}-[0-9]{1,9}")
 JIRA_RUN_KEY = re.compile(r"/(?:[\w-]+:)?sdlc\s+(?:(?:lean|full)\s+)?(?:jira\s+(?P<key>\S+)|resume\s+jira-(?P<slug>\S+))",
                           re.IGNORECASE)
 NO_KEY = "?"  # what an armed intake waits for when no key was understood: no response key can equal it
+# A token after `jira` that was meant as a key or a link (SCRUM-１, a browse URL) but was not understood arms the
+# intake with NO_KEY; ordinary words (`/sdlc jira dashboard for the team`) are an ordinary request.
+JIRA_ATTEMPT = re.compile(r"[A-Za-z][A-Za-z0-9_]*-\S*\d|atlassian\.net", re.IGNORECASE)
 JIRA_LABEL_DEFAULT = "sdlc"
 MAX_RESPONSE_CHARS = 1_000_000
 # The host app's own task-list and chapter tools: not a way out of the session, and the chair needs them.
@@ -290,11 +295,11 @@ def log_event(data: dict, kind: str, text: str) -> str:
 
 
 def start_run(data: dict, lock: Path, approved: Path, text: str) -> None:
-    jira_run, key = bool(JIRA_PROMPT.match(text)), run_key(text)
-    if jira_run or JIRA_CUE.search(text):
-        mark_jira(data, key)  # before the lock: a failed write cannot leave a lock with no marker
-    if jira_run:
-        arm_intake(data, key or NO_KEY)
+    request = jira_request(text)
+    if request is not None or JIRA_CUE.search(text):
+        mark_jira(data)  # before the lock: a failed write cannot leave a lock with no marker
+    if request is not None:
+        arm_intake(data, request)
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text(json.dumps({"since": now(), "cwd": data.get("cwd", "")}))
     approved.unlink(missing_ok=True)
@@ -302,8 +307,8 @@ def start_run(data: dict, lock: Path, approved: Path, text: str) -> None:
         "sdlc-gate: code edits in this project are locked for this session until the owner "
         f"replies {UNLOCK_WORDS}. Files under .sdlc/ stay writable."
     ]
-    if jira_run:
-        notes.append(intake_start_note(key))
+    if request is not None:
+        notes.append(intake_start_note(request))
     rules = gate_home() / "rules" / "sdlc.md"
     if not rules.is_file():
         notes.append(f"sdlc-gate: {rules} is not installed, so the risk table this command uses is "
@@ -549,6 +554,27 @@ def tests_notice(before: list[str], tests: list[str] | None) -> str:
     return "".join(f"{part} " for part in parts)
 
 
+def approval_record(plans: dict, target: str | None, limits: tuple) -> dict:
+    """What the approval file holds: the plan hashes, and the scope and frozen tests of the approved plan."""
+    globs, tests = limits
+    record = {"at": now(), "plans": plans}
+    if globs is not None:
+        record["scope"] = {"plan": target, "globs": globs}
+    if tests is not None:
+        record["tests"] = {"plan": target, "paths": tests}
+    return record
+
+
+def announce_approval(line: str, record: dict, frozen_notice: str) -> None:
+    scope = record.get("scope")
+    limit = frozen_notice + (
+        "No `sdlc-scope` block was approved, so edits are not limited to a set of paths." if scope is None
+        else f"Edits are limited to {len(scope['globs'])} pattern(s) from {scope['plan']}: {', '.join(scope['globs'])}.")
+    emit("UserPromptSubmit", system_message=f"sdlc-gate: plan approved. {limit}", additionalContext=(
+        f"sdlc-gate: plan approval recorded: {line}. Bound to: {', '.join(record['plans'])}. {limit} Copy this line "
+        "into status.md. A change to any of these plan.md files locks code edits again."))
+
+
 def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None = None) -> None:
     waiting_for = intake_pending(data)
     if waiting_for is not None:
@@ -570,11 +596,7 @@ def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None 
             globs, tests = plan_limits(root, sources[target])
     except (OSError, ValueError) as exc:
         return refuse(f"{target or 'a plan.md'} cannot be approved: {exc}. Fix the plan, then ask the owner again.")
-    record = {"at": now(), "plans": plans}
-    if globs is not None:
-        record["scope"] = {"plan": target, "globs": globs}
-    if tests is not None:
-        record["tests"] = {"plan": target, "paths": tests}
+    record = approval_record(plans, target, (globs, tests))
     frozen_notice = tests_notice(previous_tests(approved), tests)
     line = log_event(data, "approve", text)  # logged before the approval takes effect: a log error leaves the lock on
     log_event(data, "scope", f"{target or 'all plans'} scope={'none' if globs is None else len(globs)}")
@@ -582,17 +604,12 @@ def approve(data: dict, lock: Path, approved: Path, text: str, slug: str | None 
         log_event(data, "tests", f"{target} tests={len(tests)}")
     approved.write_text(json.dumps(record))
     lock.unlink(missing_ok=True)
-    limit = frozen_notice + (
-        "No `sdlc-scope` block was approved, so edits are not limited to a set of paths." if globs is None
-        else f"Edits are limited to {len(globs)} pattern(s) from {target}: {', '.join(globs)}.")
-    emit("UserPromptSubmit", system_message=f"sdlc-gate: plan approved. {limit}", additionalContext=(
-        f"sdlc-gate: plan approval recorded: {line}. Bound to: {', '.join(plans)}. {limit} Copy this line "
-        "into status.md. A change to any of these plan.md files locks code edits again."))
+    announce_approval(line, record, frozen_notice)
 
 
 def intake_start_note(key: str) -> str:
     held = ("Atlassian writes and every other MCP write are denied until `sdlc off`, and `approve plan` is refused until ")
-    if not key:
+    if key == NO_KEY:
         return ("sdlc-gate: Jira run, but no ticket key was understood in what the owner typed. " + held
                 + "the owner retypes it as `/sdlc jira SCRUM-123` and this session has read that ticket.")
     return (f"sdlc-gate: Jira run for {key}. " + held
@@ -602,9 +619,9 @@ def intake_start_note(key: str) -> str:
 def intake_refusal(waiting_for: str) -> str:
     if waiting_for == NO_KEY:
         return ("no ticket key was understood in the owner's `/sdlc jira ...`, so no ticket can satisfy the intake: "
-                "the owner retypes it, for example `/sdlc jira SCRUM-123`, or replies `sdlc off`.")
+                "the owner retypes it, for example `/sdlc jira SCRUM-123`, or replies `sdlc intake off` to go on with no ticket check.")
     return (f"the Jira ticket {waiting_for} has not been read in this session with a `{jira_label()}` label, so there "
-            "is no plan to approve. Read it with getJiraIssue, or the owner replies `sdlc off` to release the session.")
+            "is no plan to approve. Read it with getJiraIssue, or the owner replies `sdlc intake off` to go on without the label check (MCP writes stay denied).")
 
 
 def release(data: dict, lock: Path, approved: Path, text: str) -> None:
@@ -619,6 +636,18 @@ def release(data: dict, lock: Path, approved: Path, text: str) -> None:
         f"sdlc-gate: released by the owner ({line}); code edits are no longer gated in this session.{note}"))
 
 
+def release_intake(data: dict, text: str) -> None:
+    """The owner accepts a Jira run whose ticket label could not be checked. Only the pending intake goes: the
+    write block and the code lock stay, which `sdlc off` would also lift."""
+    if intake_pending(data) is None:
+        return
+    session_file(data, "jira-intake").unlink(missing_ok=True)
+    line = log_event(data, "intake-off", text)
+    emit("UserPromptSubmit", additionalContext=(
+        f"sdlc-gate: the owner released the Jira intake ({line}), so the ticket's label was not checked. `approve plan` "
+        "is no longer held for it; MCP writes stay denied and code edits stay locked."))
+
+
 def on_prompt(data: dict) -> None:
     text = unicodedata.normalize("NFC", str(data.get("prompt", ""))).strip()
     lock, approved = session_file(data, "locked"), session_file(data, "approved")
@@ -628,6 +657,8 @@ def on_prompt(data: dict) -> None:
     if RELEASE_PROMPT.fullmatch(text):
         if gated:
             release(data, lock, approved, text)
+    elif RELEASE_INTAKE_PROMPT.fullmatch(text):
+        release_intake(data, text)
     elif SDLC_PROMPT.match(text):
         start_run(data, lock, approved, text)
     elif gated:
@@ -812,13 +843,12 @@ def jira_marker_exists(data: dict) -> bool:
         return False
 
 
-def mark_jira(data: dict, key: str = "") -> None:
-    """Write the session's Jira marker; the first key typed stays in it."""
+def mark_jira(data: dict) -> None:
+    """Write the session's Jira marker: its existence is all that is read."""
     marker = session_file(data, "jira")
     if marker is not None:
         marker.parent.mkdir(parents=True, exist_ok=True)
-        if not marker.exists():
-            marker.write_text(key)
+        marker.touch()
 
 
 def run_key(text: str) -> str:
@@ -829,6 +859,16 @@ def run_key(text: str) -> str:
         token = token.partition("/BROWSE/")[2]
     found = JIRA_KEY.search(token)
     return found.group(0) if found else ""
+
+
+def jira_request(text: str) -> str | None:
+    """The key of a typed `/sdlc jira KEY` or `/sdlc resume jira-key`, NO_KEY when the token looks like a key or a
+    link that was not understood, or None when the prompt is not a Jira run."""
+    run = JIRA_RUN_KEY.match(text)
+    if not run:
+        return None
+    attempt = run.group("slug") is not None or JIRA_ATTEMPT.search(run.group("key") or "")
+    return run_key(text) or (NO_KEY if attempt else None)
 
 
 def jira_label() -> str:
@@ -1160,7 +1200,7 @@ def on_jira_seen(data: dict) -> None:
     if wanted is None or not reads_issue(data):
         return
     issues = [obj for obj in issue_objects(data.get("tool_response")) if looks_like_issue(obj)]
-    labels = issue_labels(issues[0]) if len(issues) == 1 else None
+    labels = (issue_labels(issues[0]) or []) if len(issues) == 1 else None  # one issue with no list has no labels
     outcome = "nokey" if wanted == NO_KEY else "unreadable" if labels is None else (
         "other" if str(issues[0].get("key", "")).upper() != wanted else "seen" if jira_label().lower() in labels else "missing")
     if outcome == "seen":
@@ -1180,7 +1220,7 @@ def intake_note(wanted: str, outcome: str) -> str:
         "other": f"sdlc-gate: the issue in this response is not {wanted}; `approve plan` stays held.",
         "nokey": "sdlc-gate: no ticket key was understood in the owner's `/sdlc jira ...`: the owner retypes it, and `approve plan` stays held.",
         "unreadable": ("sdlc-gate: this response could not be read as one Jira issue with a `labels` list, so its label was "
-                       "not checked and `approve plan` stays held. Tell the owner; they can reply `sdlc off` to release the session."),
+                       "not checked and `approve plan` stays held. Tell the owner; they can reply `sdlc intake off` to go on without the label check (MCP writes stay denied)."),
     }
     return notes[outcome]
 

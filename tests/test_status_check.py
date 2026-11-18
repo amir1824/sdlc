@@ -6,6 +6,7 @@ Run: python3 -I -m unittest discover -s tests
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,8 @@ BASE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 PLAN_TEXT = "# plan\n"
 PLAN_SHA = hashlib.sha256(PLAN_TEXT.encode()).hexdigest()
 HEADER = f"run: slugify\nrisk: MEDIUM\npath: full\nbase: {BASE}\n"
+BOGUS_STAGE_LINES = "7 Bogus: done\n" * 30
+GATE = REPO / "plugins" / "sdlc" / "hooks" / "sdlc_gate.py"
 FULL_FILES = ("research.md", "prd.md", "metrics.md", "plan.md", "build.md")
 FULL_RUN = (
     HEADER + f"plan-sha: {PLAN_SHA}\n"
@@ -219,8 +222,7 @@ class StatusCheckTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (0, ""))
 
     def test_the_hook_reports_at_most_ten_findings(self):
-        lines = "".join(f"{n % 9 + 1} Bogus: done\n" for n in range(30))
-        self.status.write_text(HEADER + lines)
+        self.status.write_text(HEADER + BOGUS_STAGE_LINES)
         context = json.loads(self.hook(self.hook_event(self.status)).stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(context.count("bad stage line"), 10)
         self.assertIn("(+20 more)", context)
@@ -251,8 +253,15 @@ class StatusCheckTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (0, ""))
 
 
+def limit_in(path, name):
+    return int(re.search(rf"^{name} = ([0-9_]+)", path.read_text(), re.MULTILINE).group(1).replace("_", ""))
+
+
 class WiringTest(unittest.TestCase):
     """The hook is wired for a plugin install and the chair is told the rules the validator enforces."""
+
+    def test_the_gate_and_the_check_stop_reading_a_status_at_the_same_size(self):
+        self.assertEqual(limit_in(SCRIPT, "MAX_BYTES"), limit_in(GATE, "STATUS_MAX_BYTES"))
 
     def test_hooks_json_runs_the_status_check_after_a_write(self):
         hooks = json.loads((REPO / "plugins" / "sdlc" / "hooks" / "hooks.json").read_text())["hooks"]["PostToolUse"]
